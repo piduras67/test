@@ -1,35 +1,71 @@
 #version 120
+#include "/lib/settings.glsl"
+#include "/lib/common.glsl"
 
-// Violette: tonemap, violet/pink split tone, vignette.
-
-#define TINT_STRENGTH 0.28 // [0.0 0.14 0.28 0.4 0.55]
-#define SATURATION 1.18    // [0.9 1.0 1.18 1.3 1.5]
-#define VIGNETTE 1.1       // [0.0 0.6 1.1 1.6]
+// Final: FXAA, chromatic fringe, vignette, grain.
 
 uniform sampler2D colortex0;
+uniform float viewWidth;
+uniform float viewHeight;
+uniform float frameTimeCounter;
 
 varying vec2 texcoord;
 
-vec3 aces(vec3 x) {
-    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+#define FXAA_REDUCE_MIN (1.0 / 128.0)
+#define FXAA_REDUCE_MUL (1.0 / 8.0)
+#define FXAA_SPAN_MAX 8.0
+
+vec3 fxaa(vec2 uv, vec2 px) {
+    vec3 rgbNW = texture2D(colortex0, uv + vec2(-1.0, -1.0) * px).rgb;
+    vec3 rgbNE = texture2D(colortex0, uv + vec2( 1.0, -1.0) * px).rgb;
+    vec3 rgbSW = texture2D(colortex0, uv + vec2(-1.0,  1.0) * px).rgb;
+    vec3 rgbSE = texture2D(colortex0, uv + vec2( 1.0,  1.0) * px).rgb;
+    vec3 rgbM  = texture2D(colortex0, uv).rgb;
+
+    float lNW = luma(rgbNW);
+    float lNE = luma(rgbNE);
+    float lSW = luma(rgbSW);
+    float lSE = luma(rgbSE);
+    float lM  = luma(rgbM);
+    float lMin = min(lM, min(min(lNW, lNE), min(lSW, lSE)));
+    float lMax = max(lM, max(max(lNW, lNE), max(lSW, lSE)));
+
+    vec2 dir;
+    dir.x = -((lNW + lNE) - (lSW + lSE));
+    dir.y =  ((lNW + lSW) - (lNE + lSE));
+
+    float dirReduce = max((lNW + lNE + lSW + lSE) * (0.25 * FXAA_REDUCE_MUL), FXAA_REDUCE_MIN);
+    float rcpDirMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
+    dir = min(vec2(FXAA_SPAN_MAX), max(vec2(-FXAA_SPAN_MAX), dir * rcpDirMin)) * px;
+
+    vec3 rgbA = 0.5 * (texture2D(colortex0, uv + dir * (1.0 / 3.0 - 0.5)).rgb
+                     + texture2D(colortex0, uv + dir * (2.0 / 3.0 - 0.5)).rgb);
+    vec3 rgbB = rgbA * 0.5 + 0.25 * (texture2D(colortex0, uv + dir * -0.5).rgb
+                                   + texture2D(colortex0, uv + dir *  0.5).rgb);
+    float lB = luma(rgbB);
+    return (lB < lMin || lB > lMax) ? rgbA : rgbB;
 }
 
 void main() {
-    vec3 c = texture2D(colortex0, texcoord).rgb;
-    c = aces(c * 1.1);
+    vec2 px = 1.0 / vec2(viewWidth, viewHeight);
+    vec3 c;
+#ifdef FXAA
+    c = fxaa(texcoord, px);
+#else
+    c = texture2D(colortex0, texcoord).rgb;
+#endif
 
-    float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
-
-    // shadows lean violet, highlights lean pink
-    vec3 shadowTint = vec3(0.42, 0.20, 0.95) * 1.6;
-    vec3 highTint   = vec3(1.00, 0.45, 0.75) * 1.1;
-    c = mix(c, c * mix(shadowTint, highTint, smoothstep(0.0, 0.9, l)), TINT_STRENGTH);
-
-    c = mix(vec3(l), c, SATURATION);
-    c = (c - 0.5) * 1.06 + 0.5;
+    if (CHROMATIC > 0.0) {
+        vec2 off = (texcoord - 0.5) * CHROMATIC;
+        c.r = texture2D(colortex0, texcoord + off).r;
+        c.b = texture2D(colortex0, texcoord - off).b;
+    }
 
     vec2 d = texcoord - 0.5;
-    c *= clamp(1.0 - dot(d, d) * VIGNETTE, 0.0, 1.0);
+    c *= clamp(1.0 - dot(d, d) * VIGNETTE * 1.1, 0.0, 1.0);
+
+    float g = ign(gl_FragCoord.xy + frameTimeCounter * 60.0) - 0.5;
+    c += g * FILM_GRAIN;
 
     gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
 }

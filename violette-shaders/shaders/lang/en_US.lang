@@ -1,0 +1,40 @@
+screen.LIGHTING=Lighting and Shadows
+screen.FOLIAGE=Foliage
+screen.WATER=Water
+screen.ATMOSPHERE=Atmosphere
+screen.POST=Post Processing
+
+option.SHADOW_SAMPLES=Shadow Samples
+option.SHADOW_SAMPLES.comment=Soft shadow quality. More samples look smoother but cost performance.
+option.SHADOW_SOFTNESS=Shadow Softness
+option.SHADOW_DISTORT=Shadow Focus
+option.SHADOW_DISTORT.comment=Higher values give sharper shadows near you and blurrier ones far away.
+option.shadowMapResolution=Shadow Resolution
+option.shadowDistance=Shadow Distance
+option.sunPathRotation=Sun Angle
+option.SUN_STRENGTH=Sun Strength
+option.AMBIENT_STRENGTH=Ambient Light
+option.BLOCKLIGHT_STRENGTH=Torch Light
+
+option.WAVING_FOLIAGE=Waving Foliage
+option.WAVE_SPEED=Wind Speed
+option.WAVE_AMOUNT=Wind Strength
+
+option.WATER_WAVE_HEIGHT=Wave Height
+option.WATER_OPACITY=Water Opacity
+option.WATER_REFLECTIONS=Water Reflections
+
+option.FOG_DENSITY=Fog Density
+option.SKY_TINT=Violet Sky Tint
+option.GODRAYS=Light Shafts
+option.GODRAY_STRENGTH=Light Shaft Strength
+
+option.EXPOSURE=Exposure
+option.BLOOM_STRENGTH=Bloom
+option.TINT_STRENGTH=Violet and Pink Tint
+option.SATURATION=Saturation
+option.CONTRAST=Contrast
+option.VIGNETTE=Vignette
+option.FILM_GRAIN=Film Grain
+option.CHROMATIC=Chromatic Fringe
+option.FXAA=Anti-Aliasing (FXAA)
