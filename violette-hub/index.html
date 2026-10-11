@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Violette Hub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@200;300;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #060409;
+    --fg: #f4eefb;
+    --muted: #8d819c;
+    --line: #1d1626;
+    --purple: #8b3dff;
+    --pink: #ff4fa3;
+    --font: "Outfit", "Segoe UI", system-ui, -apple-system, sans-serif;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body { height: 100%; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font);
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    flex-direction: column;
+    overflow-x: hidden;
+  }
+
+  /* soft light behind the content */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(60vmax 40vmax at 50% 55%, rgba(139, 61, 255, 0.16), transparent 70%),
+      radial-gradient(40vmax 30vmax at 62% 62%, rgba(255, 79, 163, 0.10), transparent 70%);
+    pointer-events: none;
+  }
+
+  header {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 22px 28px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .brand {
+    font-weight: 600;
+    font-size: 18px;
+    letter-spacing: 0.04em;
+    background: linear-gradient(90deg, var(--purple), var(--pink));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  nav { display: flex; gap: 6px; }
+
+  nav a {
+    position: relative;
+    padding: 8px 14px;
+    font-size: 14px;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    text-decoration: none;
+    color: var(--fg);
+  }
+
+  /* underline marks the active tab */
+  nav a[aria-current="page"]::after {
+    content: "";
+    position: absolute;
+    left: 14px;
+    right: 14px;
+    bottom: 0;
+    height: 2px;
+    border-radius: 2px;
+    background: linear-gradient(90deg, var(--purple), var(--pink));
+  }
+
+  nav a:focus-visible { outline: 2px solid var(--pink); outline-offset: 3px; border-radius: 4px; }
+
+  main {
+    position: relative;
+    z-index: 1;
+    flex: 1;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+  }
+
+  h1 {
+    margin: 0;
+    font-weight: 200;
+    font-size: clamp(64px, 16vw, 168px);
+    line-height: 1;
+    letter-spacing: -0.03em;
+    background: linear-gradient(100deg, var(--purple) 10%, var(--pink) 90%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    padding-bottom: 0.08em; /* keeps descenders from clipping */
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    h1 { animation: rise 900ms cubic-bezier(.2,.7,.2,1) both; }
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(14px); }
+      to   { opacity: 1; transform: none; }
+    }
+  }
+
+  @media (max-width: 480px) {
+    header { padding: 18px 20px; }
+  }
+</style>
+</head>
+<body>
+  <header>
+    <span class="brand">Violette Hub</span>
+    <nav aria-label="Main">
+      <a href="#" aria-current="page">Home</a>
+    </nav>
+  </header>
+
+  <main>
+    <h1>hello</h1>
+  </main>
+</body>
+</html>
