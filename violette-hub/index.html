@@ -137,12 +137,26 @@
     font-size: 13px;
     font-weight: 400;
     letter-spacing: 0.02em;
-    color: var(--fg);
+    color: var(--muted);
     text-decoration: none;
+    transition: color .2s ease, background .2s ease, box-shadow .2s ease;
+  }
+  .tab:hover { color: var(--fg); }
+  .tab[aria-current="page"] {
+    color: var(--fg);
     background: linear-gradient(180deg, rgba(168, 85, 247, 0.30), rgba(255, 79, 168, 0.22));
     box-shadow: inset 0 0 0 1px rgba(255, 122, 194, 0.35), 0 0 24px rgba(168, 85, 247, 0.25);
   }
   .tab:focus-visible { outline: 2px solid var(--rose); outline-offset: 3px; }
+
+  .panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 28px;
+  }
+  .panel[hidden] { display: none; }
+  .panel.scripts h1 { font-size: clamp(60px, 14.5vw, 176px); }
 
   /* ---------- hero ---------- */
   main {
@@ -262,19 +276,57 @@
   <div class="page">
     <nav class="nav" aria-label="Main">
       <span class="logo"><i></i>Violette Hub</span>
-      <a class="tab" href="#" aria-current="page">Home</a>
+      <a class="tab" href="#home" data-tab="home" aria-current="page">Home</a>
+      <a class="tab" href="#scripts" data-tab="scripts">Scripts</a>
     </nav>
 
     <main>
-      <span class="chip"><b></b>Welcome</span>
-      <h1 data-text="hello"><span>hello</span></h1>
-      <p class="sub">A placeholder for now. More is on the way.</p>
+      <section class="panel" data-panel="home">
+        <span class="chip"><b></b>Welcome</span>
+        <h1 data-text="hello"><span>hello</span></h1>
+        <p class="sub">A placeholder for now. More is on the way.</p>
+      </section>
+
+      <section class="panel scripts" data-panel="scripts" hidden>
+        <span class="chip"><b></b>Library</span>
+        <h1 data-text="scripts"><span>scripts</span></h1>
+        <p class="sub">Nothing here yet.</p>
+      </section>
     </main>
 
     <footer>Violette Hub</footer>
   </div>
 
 <script>
+  (function () {
+    var tabs = document.querySelectorAll("[data-tab]");
+    var panels = document.querySelectorAll("[data-panel]");
+    function show(name) {
+      if (name !== "home" && name !== "scripts") name = "home";
+      tabs.forEach(function (t) {
+        if (t.dataset.tab === name) t.setAttribute("aria-current", "page");
+        else t.removeAttribute("aria-current");
+      });
+      panels.forEach(function (p) {
+        var on = p.dataset.panel === name;
+        p.hidden = !on;
+        if (on && window.matchMedia("(prefers-reduced-motion: no-preference)").matches) {
+          p.animate([{ opacity: 0, transform: "translateY(14px)" }, { opacity: 1, transform: "none" }],
+                    { duration: 600, easing: "cubic-bezier(.2,.7,.2,1)" });
+        }
+      });
+    }
+    tabs.forEach(function (t) {
+      t.addEventListener("click", function (e) {
+        e.preventDefault();
+        show(t.dataset.tab);
+        try { history.replaceState(null, "", "#" + t.dataset.tab); } catch (err) {}
+      });
+    });
+    window.addEventListener("hashchange", function () { show(location.hash.slice(1)); });
+    show(location.hash.slice(1));
+  })();
+
   (function () {
     var spot = document.getElementById("spot");
     var tx = 0, ty = 0, x = 0, y = 0, raf = null;
