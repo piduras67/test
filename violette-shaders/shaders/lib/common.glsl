@@ -30,3 +30,16 @@ vec2 shadowDistort(vec2 p) {
     float f = length(p) * SHADOW_DISTORT + (1.0 - SHADOW_DISTORT);
     return p / f;
 }
+
+// Patches of standing water on exposed, upward-facing ground when it rains.
+float puddleNoise(vec2 p) {
+    return smoothstep(0.52, 0.72, vnoise(p * 0.35) * 0.65 + vnoise(p * 1.1) * 0.35);
+}
+
+// Moving light patterns on the sea floor.
+float causticPattern(vec2 p, float t) {
+    float a = vnoise(p * 1.7 + vec2(t * 0.35, t * 0.20));
+    float b = vnoise(p * 2.9 - vec2(t * 0.25, -t * 0.30) + 7.3);
+    float c = 1.0 - abs(a + b - 1.0);
+    return pow(clamp(c, 0.0, 1.0), 6.0);
+}

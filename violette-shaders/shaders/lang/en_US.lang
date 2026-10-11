@@ -1,4 +1,5 @@
 screen.LIGHTING=Lighting and Shadows
+screen.MATERIALS=Materials
 screen.FOLIAGE=Foliage
 screen.WATER=Water
 screen.ATMOSPHERE=Atmosphere
@@ -9,26 +10,48 @@ option.SHADOW_SAMPLES.comment=Soft shadow quality. More samples look smoother bu
 option.SHADOW_SOFTNESS=Shadow Softness
 option.SHADOW_DISTORT=Shadow Focus
 option.SHADOW_DISTORT.comment=Higher values give sharper shadows near you and blurrier ones far away.
+option.COLORED_SHADOWS=Colored Shadows
+option.COLORED_SHADOWS.comment=Light picks up the color of stained glass and water.
 option.shadowMapResolution=Shadow Resolution
 option.shadowDistance=Shadow Distance
 option.sunPathRotation=Sun Angle
 option.SUN_STRENGTH=Sun Strength
 option.AMBIENT_STRENGTH=Ambient Light
 option.BLOCKLIGHT_STRENGTH=Torch Light
+option.SSAO=Ambient Occlusion
+option.SSAO.comment=Soft contact shadows in corners and under objects.
+option.SSAO_SAMPLES=AO Samples
+option.SSAO_RADIUS=AO Radius
+option.SSAO_STRENGTH=AO Strength
+
+option.PBR_SUPPORT=PBR Resource Packs
+option.PBR_SUPPORT.comment=Uses LabPBR normal and specular maps when your resource pack has them.
+option.WET_WORLD=Rain Wetness
+option.WET_WORLD.comment=Darker, glossier ground and puddles in the rain.
 
 option.WAVING_FOLIAGE=Waving Foliage
 option.WAVE_SPEED=Wind Speed
 option.WAVE_AMOUNT=Wind Strength
+option.FOLIAGE_GLOW=Light Through Leaves
 
 option.WATER_WAVE_HEIGHT=Wave Height
 option.WATER_OPACITY=Water Opacity
 option.WATER_REFLECTIONS=Water Reflections
+option.SSR=Screen-Space Reflections
+option.SSR.comment=Water, puddles and shiny surfaces reflect what is on screen.
+option.SSR_STEPS=Reflection Steps
+option.FOAM=Shoreline Foam
+option.CAUSTICS=Caustics
 
+option.VOLUMETRIC_FOG=Volumetric Fog
+option.VOLUMETRIC_FOG.comment=Ray-marched fog with real light shafts. Turn off for a cheaper distance fog.
+option.VF_STEPS=Fog Quality
+option.VF_STRENGTH=Light Shaft Strength
 option.FOG_DENSITY=Fog Density
 option.SKY_TINT=Violet Sky Tint
-option.GODRAYS=Light Shafts
-option.GODRAY_STRENGTH=Light Shaft Strength
 
+option.AUTO_EXPOSURE=Auto Exposure
+option.AUTO_EXPOSURE.comment=Your eyes adjust when moving between dark and bright places.
 option.EXPOSURE=Exposure
 option.BLOOM_STRENGTH=Bloom
 option.TINT_STRENGTH=Violet and Pink Tint

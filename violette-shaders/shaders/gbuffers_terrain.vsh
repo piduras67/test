@@ -4,6 +4,7 @@
 
 attribute vec4 mc_Entity;
 attribute vec2 mc_midTexCoord;
+attribute vec4 at_tangent;
 
 uniform mat4 gbufferModelView;
 uniform mat4 gbufferModelViewInverse;
@@ -14,6 +15,8 @@ varying vec2 texcoord;
 varying vec2 lmcoord;
 varying vec4 glcolor;
 varying vec3 normal;
+varying vec3 tangent;
+varying vec3 bitangent;
 varying float material;
 
 #include "/lib/waving.glsl"
@@ -35,6 +38,9 @@ void main() {
     gl_Position = gl_ProjectionMatrix * (gbufferModelView * vec4(feet, 1.0));
 
     normal = normalize(gl_NormalMatrix * gl_Normal);
+    tangent = normalize(gl_NormalMatrix * at_tangent.xyz);
+    bitangent = cross(tangent, normal) * (at_tangent.w < 0.0 ? -1.0 : 1.0);
+
     vec3 upN = normalize(mat3(gbufferModelView) * vec3(0.0, 1.0, 0.0));
 
     material = 0.0;

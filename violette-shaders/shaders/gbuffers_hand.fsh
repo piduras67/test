@@ -13,8 +13,9 @@ void main() {
     c.rgb = mix(c.rgb, entityColor.rgb, entityColor.a);
     c.rgb *= texture2D(lightmap, lmcoord).rgb;
 
-    /* DRAWBUFFERS:012 */
+    /* DRAWBUFFERS:0126 */
     gl_FragData[0] = c;
     gl_FragData[1] = vec4(0.0);   // not deferred lit
     gl_FragData[2] = vec4(0.0);
+    gl_FragData[3] = vec4(0.0);
 }

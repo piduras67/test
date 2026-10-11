@@ -1,6 +1,6 @@
 #version 120
 
-// No light shafts outside the overworld.
+// No reflections or volumetric fog outside the overworld.
 
 uniform sampler2D colortex0;
 
