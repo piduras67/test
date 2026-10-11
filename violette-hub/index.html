@@ -6,21 +6,24 @@
 <title>Violette Hub</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@200;300;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@200;300;400;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #060409;
-    --fg: #f4eefb;
-    --muted: #8d819c;
-    --line: #1d1626;
-    --purple: #8b3dff;
-    --pink: #ff4fa3;
-    --font: "Outfit", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --bg: #040207;
+    --fg: #f6f0ff;
+    --muted: #8a7d9c;
+    --violet: #7c3aed;
+    --purple: #a855f7;
+    --pink: #ff4fa8;
+    --rose: #ff7ac2;
+    --glass: rgba(255, 255, 255, 0.045);
+    --glass-line: rgba(255, 255, 255, 0.09);
+    --font: "Sora", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
     color-scheme: dark;
   }
 
   * { box-sizing: border-box; }
-
   html, body { height: 100%; }
 
   body {
@@ -29,115 +32,264 @@
     color: var(--fg);
     font-family: var(--font);
     -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* ---------- atmosphere ---------- */
+  .bg { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+
+  .blob {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(90px);
+    opacity: 0.55;
+    will-change: transform;
+  }
+  .blob.a { width: 52vmax; height: 52vmax; left: -14vmax; top: -18vmax; background: radial-gradient(circle at 40% 40%, var(--violet), transparent 65%); }
+  .blob.b { width: 46vmax; height: 46vmax; right: -14vmax; bottom: -20vmax; background: radial-gradient(circle at 55% 45%, var(--pink), transparent 65%); opacity: 0.42; }
+  .blob.c { width: 34vmax; height: 34vmax; left: 38%; top: 34%; background: radial-gradient(circle, var(--purple), transparent 65%); opacity: 0.30; }
+
+  /* fine grid that fades toward the edges */
+  .grid {
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.045) 1px, transparent 1px);
+    background-size: 64px 64px;
+    -webkit-mask-image: radial-gradient(ellipse 60% 55% at 50% 52%, #000 10%, transparent 75%);
+    mask-image: radial-gradient(ellipse 60% 55% at 50% 52%, #000 10%, transparent 75%);
+  }
+
+  /* film grain, keeps the gradients from banding */
+  .grain {
+    position: absolute;
+    inset: -50%;
+    opacity: 0.07;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.9 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  }
+
+  /* follows the pointer */
+  .spot {
+    position: absolute;
+    width: 46vmax;
+    height: 46vmax;
+    left: 0; top: 0;
+    margin: -23vmax 0 0 -23vmax;
+    background: radial-gradient(circle, rgba(255, 79, 168, 0.16), transparent 60%);
+    transform: translate3d(50vw, 50vh, 0);
+    opacity: 0;
+    transition: opacity .6s ease;
+  }
+  body.pointer .spot { opacity: 1; }
+
+  /* ---------- layout ---------- */
+  .page {
+    position: relative;
+    z-index: 1;
+    height: 100%;
     display: flex;
     flex-direction: column;
-    overflow-x: hidden;
+    align-items: center;
+    padding: 22px 20px 26px;
   }
 
-  /* soft light behind the content */
-  body::before {
-    content: "";
-    position: fixed;
-    inset: 0;
-    background:
-      radial-gradient(60vmax 40vmax at 50% 55%, rgba(139, 61, 255, 0.16), transparent 70%),
-      radial-gradient(40vmax 30vmax at 62% 62%, rgba(255, 79, 163, 0.10), transparent 70%);
-    pointer-events: none;
-  }
-
-  header {
-    position: relative;
-    z-index: 1;
+  /* floating glass nav */
+  .nav {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 22px 28px;
-    border-bottom: 1px solid var(--line);
+    gap: 6px;
+    padding: 6px 6px 6px 16px;
+    border: 1px solid var(--glass-line);
+    border-radius: 999px;
+    background: var(--glass);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    backdrop-filter: blur(18px) saturate(140%);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
   }
 
-  .brand {
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     font-weight: 600;
-    font-size: 18px;
-    letter-spacing: 0.04em;
-    background: linear-gradient(90deg, var(--purple), var(--pink));
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-  }
-
-  nav { display: flex; gap: 6px; }
-
-  nav a {
-    position: relative;
-    padding: 8px 14px;
     font-size: 14px;
-    font-weight: 500;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    text-decoration: none;
-    color: var(--fg);
+    letter-spacing: 0.02em;
+    padding-right: 14px;
+    margin-right: 4px;
+    border-right: 1px solid var(--glass-line);
+    white-space: nowrap;
+  }
+  .logo i {
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    transform: rotate(45deg);
+    background: linear-gradient(135deg, var(--purple), var(--pink));
+    box-shadow: 0 0 18px rgba(255, 79, 168, 0.7);
   }
 
-  /* underline marks the active tab */
-  nav a[aria-current="page"]::after {
-    content: "";
-    position: absolute;
-    left: 14px;
-    right: 14px;
-    bottom: 0;
-    height: 2px;
-    border-radius: 2px;
-    background: linear-gradient(90deg, var(--purple), var(--pink));
-  }
-
-  nav a:focus-visible { outline: 2px solid var(--pink); outline-offset: 3px; border-radius: 4px; }
-
-  main {
+  .tab {
     position: relative;
-    z-index: 1;
+    padding: 9px 18px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 400;
+    letter-spacing: 0.02em;
+    color: var(--fg);
+    text-decoration: none;
+    background: linear-gradient(180deg, rgba(168, 85, 247, 0.30), rgba(255, 79, 168, 0.22));
+    box-shadow: inset 0 0 0 1px rgba(255, 122, 194, 0.35), 0 0 24px rgba(168, 85, 247, 0.25);
+  }
+  .tab:focus-visible { outline: 2px solid var(--rose); outline-offset: 3px; }
+
+  /* ---------- hero ---------- */
+  main {
     flex: 1;
-    display: grid;
-    place-items: center;
-    padding: 24px;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 28px;
+    text-align: center;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 14px;
+    border: 1px solid var(--glass-line);
+    border-radius: 999px;
+    background: var(--glass);
+    font: 500 11px/1 var(--mono);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .chip b {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--pink);
+    box-shadow: 0 0 10px var(--pink);
   }
 
   h1 {
+    position: relative;
     margin: 0;
     font-weight: 200;
-    font-size: clamp(64px, 16vw, 168px);
-    line-height: 1;
-    letter-spacing: -0.03em;
-    background: linear-gradient(100deg, var(--purple) 10%, var(--pink) 90%);
+    font-size: clamp(76px, 19vw, 224px);
+    line-height: 0.95;
+    letter-spacing: -0.045em;
+    padding: 0 0.04em 0.1em;
+  }
+  h1 span,
+  h1::before {
+    background: linear-gradient(100deg, #c4a0ff 0%, var(--purple) 28%, var(--pink) 70%, var(--rose) 100%);
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
-    padding-bottom: 0.08em; /* keeps descenders from clipping */
+  }
+  /* blurred copy behind the word for the glow */
+  h1::before {
+    content: attr(data-text);
+    position: absolute;
+    left: 0; right: 0; top: 0;
+    padding: inherit;
+    filter: blur(34px);
+    opacity: 0.7;
+    z-index: -1;
   }
 
+  .sub {
+    margin: 0;
+    max-width: 34ch;
+    font-size: 15px;
+    font-weight: 300;
+    line-height: 1.7;
+    color: var(--muted);
+  }
+
+  footer {
+    font: 400 11px/1 var(--mono);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #5d5270;
+  }
+
+  /* ---------- motion ---------- */
   @media (prefers-reduced-motion: no-preference) {
-    h1 { animation: rise 900ms cubic-bezier(.2,.7,.2,1) both; }
-    @keyframes rise {
-      from { opacity: 0; transform: translateY(14px); }
-      to   { opacity: 1; transform: none; }
-    }
+    .blob.a { animation: drift1 22s ease-in-out infinite alternate; }
+    .blob.b { animation: drift2 26s ease-in-out infinite alternate; }
+    .blob.c { animation: drift3 30s ease-in-out infinite alternate; }
+    @keyframes drift1 { to { transform: translate3d(9vmax, 7vmax, 0) scale(1.1); } }
+    @keyframes drift2 { to { transform: translate3d(-8vmax, -6vmax, 0) scale(1.08); } }
+    @keyframes drift3 { to { transform: translate3d(-6vmax, 5vmax, 0) scale(0.92); } }
+
+    .nav    { animation: rise .8s cubic-bezier(.2,.7,.2,1) both; }
+    .chip   { animation: rise .8s .15s cubic-bezier(.2,.7,.2,1) both; }
+    h1      { animation: rise 1.1s .25s cubic-bezier(.2,.7,.2,1) both; }
+    .sub    { animation: rise .8s .45s cubic-bezier(.2,.7,.2,1) both; }
+    footer  { animation: fade 1.2s .8s ease both; }
+    .chip b { animation: pulse 2.4s ease-in-out infinite; }
+
+    @keyframes rise  { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+    @keyframes fade  { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes pulse { 50% { opacity: .35; } }
   }
 
-  @media (max-width: 480px) {
-    header { padding: 18px 20px; }
+  @media (max-width: 520px) {
+    .page { padding: 16px 14px 20px; }
+    .logo { font-size: 13px; padding-right: 10px; }
+    .tab  { padding: 8px 14px; }
+    main  { gap: 22px; }
   }
 </style>
 </head>
 <body>
-  <header>
-    <span class="brand">Violette Hub</span>
-    <nav aria-label="Main">
-      <a href="#" aria-current="page">Home</a>
-    </nav>
-  </header>
+  <div class="bg" aria-hidden="true">
+    <div class="blob a"></div>
+    <div class="blob b"></div>
+    <div class="blob c"></div>
+    <div class="grid"></div>
+    <div class="spot" id="spot"></div>
+    <div class="grain"></div>
+  </div>
 
-  <main>
-    <h1>hello</h1>
-  </main>
+  <div class="page">
+    <nav class="nav" aria-label="Main">
+      <span class="logo"><i></i>Violette Hub</span>
+      <a class="tab" href="#" aria-current="page">Home</a>
+    </nav>
+
+    <main>
+      <span class="chip"><b></b>Welcome</span>
+      <h1 data-text="hello"><span>hello</span></h1>
+      <p class="sub">A placeholder for now. More is on the way.</p>
+    </main>
+
+    <footer>Violette Hub</footer>
+  </div>
+
+<script>
+  (function () {
+    var spot = document.getElementById("spot");
+    var tx = 0, ty = 0, x = 0, y = 0, raf = null;
+    function loop() {
+      x += (tx - x) * 0.12;
+      y += (ty - y) * 0.12;
+      spot.style.transform = "translate3d(" + x + "px," + y + "px,0)";
+      raf = Math.abs(tx - x) + Math.abs(ty - y) > 0.5 ? requestAnimationFrame(loop) : null;
+    }
+    window.addEventListener("pointermove", function (e) {
+      document.body.classList.add("pointer");
+      tx = e.clientX; ty = e.clientY;
+      if (!raf) raf = requestAnimationFrame(loop);
+    }, { passive: true });
+  })();
+</script>
 </body>
 </html>
