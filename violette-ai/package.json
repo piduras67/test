@@ -1,0 +1,16 @@
+{
+  "name": "violette-ai",
+  "version": "1.0.0",
+  "description": "A chat assistant page for Violette Hub, powered by Claude.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.133.0"
+  }
+}
