@@ -1,11 +1,11 @@
-// Violette AI: a tiny web server that sits between your chat page and Claude.
+// DarkGPT: a tiny web server between your chat page and the Groq API.
 // The API key lives only here, on the server, and never reaches the browser.
+// No packages needed. Requires Node 18 or newer.
 
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import Anthropic from "@anthropic-ai/sdk";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -13,8 +13,9 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 try {
   const raw = fs.readFileSync(path.join(here, ".env"), "utf8");
   for (const line of raw.split(/\r?\n/)) {
+    if (line.trim().startsWith("#")) continue;
     const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
-    if (!m || line.trim().startsWith("#")) continue;
+    if (!m) continue;
     const value = m[2].replace(/^["']|["']$/g, "");
     if (process.env[m[1]] === undefined) process.env[m[1]] = value;
   }
@@ -24,26 +25,56 @@ try {
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || "127.0.0.1";
-const MODEL = process.env.MODEL || "claude-opus-5-5";
-const EFFORT = process.env.EFFORT || "low";
-const AI_NAME = process.env.AI_NAME || "Violette";
+const AI_NAME = process.env.AI_NAME || "DarkGPT";
+const API_BASE = (process.env.GROQ_BASE_URL || "https://api.groq.com/openai/v1").replace(/\/$/, "");
+const API_KEY = process.env.GROQ_API_KEY;
+let MODEL = process.env.MODEL || "llama-3.3-70b-versatile";
 
-const SYSTEM_PROMPT = `You are ${AI_NAME}, the built-in assistant of Violette Hub.
-You are friendly, clear and concise. Prefer short paragraphs, and use fenced code blocks for code.
-You are good at helping with Roblox game development (Luau), Minecraft, web development and everyday questions.
+const SYSTEM_PROMPT = `You are ${AI_NAME}, a sharp, straight-talking AI assistant with a sleek, dark personality.
+You are helpful, clear and concise. Prefer short paragraphs, and use fenced code blocks for code.
+You are good at Roblox game development (Luau), Minecraft, web development, and everyday questions.
 If you are unsure of something, say so instead of guessing.`;
 
-if (!process.env.ANTHROPIC_API_KEY) {
+if (!API_KEY) {
   console.error("\nNo API key found.");
   console.error('Create a file named ".env" next to server.js containing:');
-  console.error("  ANTHROPIC_API_KEY=sk-ant-your-key-here\n");
-  console.error("Get a key at https://console.anthropic.com/ (API usage is billed separately from claude.ai plans).\n");
+  console.error("  GROQ_API_KEY=gsk_your_key_here\n");
+  console.error("Get a free key at https://console.groq.com/keys\n");
   process.exit(1);
 }
 
-const client = new Anthropic();
+// ---------- pick a model that really exists for this account ----------
+const PREFERRED = [
+  "llama-3.3-70b-versatile",
+  "llama-3.1-70b-versatile",
+  "openai/gpt-oss-120b",
+  "llama-3.1-8b-instant",
+];
+async function resolveModel() {
+  try {
+    const res = await fetch(`${API_BASE}/models`, {
+      headers: { Authorization: `Bearer ${API_KEY}` },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (res.status === 401) {
+      console.error("Groq rejected the API key. Check GROQ_API_KEY in your .env file.\n");
+      return;
+    }
+    if (!res.ok) return;
+    const ids = ((await res.json()).data || []).map((m) => m.id);
+    if (ids.includes(MODEL)) return;
+    const skip = /whisper|guard|tts|playai|distil-whisper|embed/i;
+    const pick = PREFERRED.find((id) => ids.includes(id)) || ids.find((id) => !skip.test(id));
+    if (pick) {
+      console.log(`Model "${MODEL}" is not available, using "${pick}" instead.`);
+      MODEL = pick;
+    }
+  } catch {
+    // offline at startup: keep the configured model
+  }
+}
 
-// ---------- limits that protect your credit ----------
+// ---------- limits that protect your quota ----------
 const MAX_BODY_BYTES = 200_000;
 const MAX_MESSAGES = 40;
 const MAX_CHARS_PER_MESSAGE = 8000;
@@ -88,18 +119,20 @@ function cleanMessages(input) {
     role: m && m.role === "assistant" ? "assistant" : "user",
     content: String((m && m.content) ?? "").slice(0, MAX_CHARS_PER_MESSAGE),
   }));
-  // drop empty turns, then make sure the conversation starts and ends with the user
   const nonEmpty = msgs.filter((m) => m.content.trim() !== "");
   while (nonEmpty.length && nonEmpty[0].role !== "user") nonEmpty.shift();
   if (!nonEmpty.length || nonEmpty[nonEmpty.length - 1].role !== "user") return null;
-  // merge consecutive turns from the same role so the API accepts them
-  const merged = [];
-  for (const m of nonEmpty) {
-    const last = merged[merged.length - 1];
-    if (last && last.role === m.role) last.content += "\n\n" + m.content;
-    else merged.push({ ...m });
-  }
-  return merged;
+  return nonEmpty;
+}
+
+function friendlyError(status, bodyText) {
+  let detail = "";
+  try { detail = JSON.parse(bodyText).error?.message || ""; } catch { detail = String(bodyText || "").slice(0, 200); }
+  if (status === 401) return "Groq rejected the API key. Check GROQ_API_KEY in your .env file.";
+  if (status === 429) return "Groq's free limit was hit. Wait a minute and try again.";
+  if (status === 404 || /model/i.test(detail)) return `Groq says the model "${MODEL}" is not available. Set MODEL in your .env to one from console.groq.com.`;
+  if (status >= 500) return "Groq is having trouble right now. Try again in a moment.";
+  return detail ? `Groq error: ${detail}` : `Groq returned an error (${status}).`;
 }
 
 // ---------- the chat endpoint (streams the reply as server-sent events) ----------
@@ -134,65 +167,54 @@ async function handleChat(req, res) {
   });
   const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
 
-  let current = null;
-  req.on("close", () => {
-    if (current) current.abort();
-  });
-
-  async function run(useFallback) {
-    const params = {
-      model: MODEL,
-      max_tokens: 16000,
-      system: SYSTEM_PROMPT,
-      output_config: { effort: EFFORT },
-      messages,
-    };
-    if (useFallback) {
-      // If Claude's safety systems decline a request, a fallback model can answer it instead.
-      params.betas = ["server-side-fallback-2026-07-01"];
-      params.fallbacks = "default";
-    }
-    const stream = useFallback ? client.beta.messages.stream(params) : client.messages.stream(params);
-    current = stream;
-
-    let sentAny = false;
-    for await (const event of stream) {
-      if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
-        sentAny = true;
-        send({ text: event.delta.text });
-      }
-    }
-    const final = await stream.finalMessage();
-    return { final, sentAny };
-  }
+  const abort = new AbortController();
+  res.on("close", () => abort.abort());
 
   try {
-    let result;
-    try {
-      result = await run(process.env.FALLBACKS !== "off");
-    } catch (err) {
-      // If the optional fallback feature is rejected, quietly retry without it.
-      if (err instanceof Anthropic.BadRequestError && process.env.FALLBACKS !== "off") {
-        result = await run(false);
-      } else {
-        throw err;
+    const upstream = await fetch(`${API_BASE}/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [{ role: "system", content: SYSTEM_PROMPT }, ...messages],
+        stream: true,
+        temperature: 0.7,
+        max_tokens: 4096,
+      }),
+      signal: abort.signal,
+    });
+
+    if (!upstream.ok) {
+      send({ error: friendlyError(upstream.status, await upstream.text()) });
+      return;
+    }
+
+    const decoder = new TextDecoder();
+    let buf = "";
+    let finish = null;
+    for await (const chunk of upstream.body) {
+      buf += decoder.decode(chunk, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (payload === "[DONE]") continue;
+        let json;
+        try { json = JSON.parse(payload); } catch { continue; }
+        if (json.error) { send({ error: friendlyError(500, JSON.stringify(json)) }); continue; }
+        const choice = json.choices && json.choices[0];
+        if (!choice) continue;
+        if (choice.delta && choice.delta.content) send({ text: choice.delta.content });
+        if (choice.finish_reason) finish = choice.finish_reason;
       }
     }
-    if (result.final.stop_reason === "refusal") {
-      send({ text: result.sentAny ? "\n\n" : "", notice: "I can't help with that one." });
-    }
-    send({ done: true, stop_reason: result.final.stop_reason });
+    send({ done: true, stop_reason: finish });
   } catch (err) {
-    let message = "Something went wrong talking to Claude.";
-    if (err instanceof Anthropic.AuthenticationError) message = "The API key was rejected. Check ANTHROPIC_API_KEY in your .env file.";
-    else if (err instanceof Anthropic.RateLimitError) message = "Claude is rate limited right now. Try again in a moment.";
-    else if (err instanceof Anthropic.NotFoundError) message = `The model "${MODEL}" was not found for your account.`;
-    else if (err instanceof Anthropic.APIConnectionError) message = "Could not reach the Claude API. Check your internet connection.";
-    else if (err instanceof Anthropic.APIError && err.status === 400 && /credit|billing/i.test(String(err.message))) {
-      message = "Your Anthropic account is out of credit. Add some at console.anthropic.com.";
-    }
+    if (err && err.name === "AbortError") return;
     console.error("chat error:", err && err.message);
-    if (!res.writableEnded) send({ error: message });
+    if (!res.writableEnded) send({ error: "Could not reach Groq. Check your internet connection." });
   } finally {
     if (!res.writableEnded) res.end();
   }
@@ -201,7 +223,7 @@ async function handleChat(req, res) {
 // ---------- tiny static server for the page ----------
 const PAGE = path.join(here, "public", "index.html");
 
-const server = http.createServer(async (req, res) => {
+const server = http.createServer((req, res) => {
   const url = (req.url || "/").split("?")[0];
 
   if (req.method === "POST" && url === "/api/chat") {
@@ -236,7 +258,8 @@ const server = http.createServer(async (req, res) => {
   res.end("Not found");
 });
 
+await resolveModel();
 server.listen(PORT, HOST, () => {
   console.log(`\n${AI_NAME} is running at http://${HOST === "0.0.0.0" ? "localhost" : HOST}:${PORT}`);
-  console.log(`Model: ${MODEL}   Effort: ${EFFORT}\n`);
+  console.log(`Model: ${MODEL}\n`);
 });

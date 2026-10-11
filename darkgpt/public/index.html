@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Violette AI</title>
+<title>DarkGPT</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@200;300;400;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -285,7 +285,7 @@
 
   <div class="app">
     <header>
-      <div class="brand"><i></i><span id="brand">Violette AI</span></div>
+      <div class="brand"><i></i><span id="brand">DarkGPT</span></div>
       <div class="head-right">
         <span class="chip" id="model" hidden></span>
         <button class="btn" id="new" type="button">New chat</button>
@@ -296,7 +296,7 @@
 
     <div class="composer-wrap">
       <form class="composer" id="form">
-        <textarea id="input" rows="1" placeholder="Message Violette" aria-label="Message" maxlength="8000"></textarea>
+        <textarea id="input" rows="1" placeholder="Message DarkGPT" aria-label="Message" maxlength="8000"></textarea>
         <button class="send" id="send" type="submit" aria-label="Send">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
         </button>
@@ -312,12 +312,12 @@
   var input = document.getElementById("input");
   var sendBtn = document.getElementById("send");
   var newBtn = document.getElementById("new");
-  var STORE = "violette-ai-chat-v1";
+  var STORE = "darkgpt-chat-v1";
 
   var messages = [];      // { role, content }
   var busy = false;
   var controller = null;
-  var aiName = "Violette";
+  var aiName = "DarkGPT";
 
   var SUGGESTIONS = [
     "Explain how Roblox RemoteEvents work",
@@ -424,7 +424,7 @@
     log.innerHTML = "";
     var box = document.createElement("div");
     box.className = "empty";
-    box.innerHTML = "<h1>" + esc(aiName.toLowerCase()) + "</h1><p>Ask me anything. I can help with Roblox, Minecraft, code and more.</p>";
+    box.innerHTML = "<h1>" + esc(aiName) + "</h1><p>Ask me anything. I can help with Roblox, Minecraft, code and more.</p>";
     var wrap = document.createElement("div");
     wrap.className = "suggestions";
     SUGGESTIONS.forEach(function (s) {
@@ -479,15 +479,20 @@
     controller = new AbortController();
 
     var pending = false;
+    var finished = false;
     function paint(final) {
+      if (final) finished = true;
       var stick = atBottom();
       bubble.innerHTML = render(reply) + (final ? "" : '<span class="cursor"></span>');
       if (stick) toBottom();
     }
     function schedule() {
-      if (pending) return;
+      if (pending || finished) return;
       pending = true;
-      requestAnimationFrame(function () { pending = false; paint(false); });
+      requestAnimationFrame(function () {
+        pending = false;
+        if (!finished) paint(false);   // a late frame must not bring the cursor back
+      });
     }
 
     try {
@@ -575,7 +580,7 @@
   fetch("/api/info").then(function (r) { return r.json(); }).then(function (info) {
     if (info.name) {
       aiName = info.name;
-      document.getElementById("brand").textContent = info.name + " AI";
+      document.getElementById("brand").textContent = info.name;
       input.placeholder = "Message " + info.name;
       if (!messages.length) showEmpty();
     }

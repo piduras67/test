@@ -1,0 +1,13 @@
+{
+  "name": "darkgpt",
+  "version": "1.0.0",
+  "description": "DarkGPT: a chat assistant page powered by Groq.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
