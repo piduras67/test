@@ -4,7 +4,9 @@
 
 // Nether / End: flat ambient plus warm block light. Output is linear HDR like the overworld pass.
 
+/*
 const int colortex0Format = RGBA16F;
+*/
 
 uniform sampler2D colortex0;
 uniform sampler2D colortex1;

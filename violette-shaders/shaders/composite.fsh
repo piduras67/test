@@ -4,7 +4,9 @@
 
 // Pass 1: deferred lighting, sun shadows, sky, water shading, fog. Output is linear HDR.
 
+/*
 const int colortex0Format = RGBA16F;
+*/
 const int shadowMapResolution = 2048; // [1024 2048 3072 4096]
 const float shadowDistance = 128.0;   // [64.0 96.0 128.0 192.0 256.0]
 const float sunPathRotation = -25.0;  // [-40.0 -25.0 -10.0 0.0 10.0 25.0 40.0]
