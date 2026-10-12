@@ -1,0 +1,640 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ripe &amp; Co. Fruit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* Layout: a calm storefront. Bright white page, pastel tile behind each fruit, one deep green for every action. */
+:root {
+  --bg: #ffffff;
+  --soft: #f3f7f1;
+  --ink: #11201a;
+  --muted: #55665c;
+  --line: #e1e9dd;
+  --green: #1b7b4a;
+  --green-d: #135c37;
+  --green-soft: #e3f2e8;
+  --coral: #ff5a47;
+  --sun: #ffd23f;
+  --shadow: 0 1px 2px rgba(17, 32, 26, 0.05), 0 8px 24px rgba(17, 32, 26, 0.06);
+  --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body: "Manrope", "Segoe UI", system-ui, -apple-system, sans-serif;
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 84px; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 400 16px/1.65 var(--body);
+  -webkit-font-smoothing: antialiased;
+  padding-inline: 20px;
+}
+h1, h2, h3, p { margin: 0; }
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; letter-spacing: -0.025em; line-height: 1.08; }
+a { color: inherit; }
+button { font: inherit; color: inherit; }
+[hidden] { display: none !important; }
+:focus-visible { outline: 3px solid var(--green); outline-offset: 3px; border-radius: 8px; }
+.wrap { max-width: 1160px; margin-inline: auto; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ---------- buttons ---------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  font: 600 15px/1 var(--body);
+  padding: 15px 22px;
+  border-radius: 999px;
+  border: 1.5px solid transparent;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background .2s, color .2s, border-color .2s, transform .15s;
+}
+.btn:active { transform: translateY(1px); }
+.btn.primary { background: var(--green); color: #fff; }
+.btn.primary:hover { background: var(--green-d); }
+.btn.ghost { background: transparent; color: var(--ink); border-color: var(--line); }
+.btn.ghost:hover { border-color: var(--ink); }
+.btn.small { padding: 11px 16px; font-size: 14px; }
+.btn.block { width: 100%; }
+.btn[disabled] { opacity: .45; cursor: default; }
+
+/* ---------- header ---------- */
+header.top {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20;
+  margin-inline: -20px; padding-inline: 20px;
+  background: rgba(255, 255, 255, 0.88);
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--line);
+}
+.bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; height: 68px; }
+.logo { display: flex; align-items: center; gap: 10px; text-decoration: none; font: 800 21px/1 var(--display); letter-spacing: -0.03em; }
+.logo svg { width: 28px; height: 28px; flex: none; }
+nav.links { display: flex; align-items: center; gap: 30px; font-size: 15px; font-weight: 500; }
+nav.links a { text-decoration: none; color: var(--muted); transition: color .2s; }
+nav.links a:hover { color: var(--ink); }
+.cartbtn {
+  position: relative; display: inline-flex; align-items: center; gap: 10px;
+  padding: 11px 16px; border-radius: 999px; border: 1.5px solid var(--line); background: #fff;
+  font: 600 14px/1 var(--body); cursor: pointer; transition: border-color .2s;
+}
+.cartbtn:hover { border-color: var(--ink); }
+.cartbtn svg { width: 18px; height: 18px; }
+.count {
+  min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px;
+  background: var(--green); color: #fff; font-size: 12px; line-height: 22px; text-align: center; font-variant-numeric: tabular-nums;
+}
+.count[data-zero="true"] { background: var(--soft); color: var(--muted); }
+
+/* ---------- hero ---------- */
+.hero { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); gap: 56px; align-items: center; padding-block: 72px 88px; }
+.eyebrow { display: inline-flex; align-items: center; gap: 10px; font: 700 13px/1 var(--body); letter-spacing: 0.1em; text-transform: uppercase; color: var(--green); }
+.eyebrow::before { content: ""; width: 28px; height: 2px; background: var(--green); border-radius: 2px; }
+.hero h1 { margin-top: 20px; font-size: clamp(42px, 6.4vw, 78px); font-weight: 800; letter-spacing: -0.04em; line-height: 1.02; }
+.hero h1 em { font-style: normal; color: var(--green); }
+.hero .lead { margin-top: 22px; max-width: 44ch; font-size: 19px; color: var(--muted); }
+.hero .cta { margin-top: 34px; display: flex; flex-wrap: wrap; gap: 12px; }
+.perks { margin: 40px 0 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 12px 28px; font-size: 14px; font-weight: 600; color: var(--muted); }
+.perks li { display: flex; align-items: center; gap: 8px; }
+.perks svg { width: 18px; height: 18px; color: var(--green); flex: none; }
+
+.heroart { position: relative; width: 100%; max-width: 540px; aspect-ratio: 1; margin-inline: auto; }
+.heroart .disc { position: absolute; inset: 4%; border-radius: 50%; background: var(--soft); }
+.heroart .ring { position: absolute; inset: 14%; border-radius: 50%; border: 1.5px dashed #cfdccb; }
+.heroart svg.f { position: absolute; display: block; filter: drop-shadow(0 12px 14px rgba(17, 32, 26, 0.10)); }
+
+/* ---------- sections ---------- */
+section.block { padding-block: 88px; border-top: 1px solid var(--line); }
+.head { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 36px; }
+.head h2 { font-size: clamp(30px, 4vw, 46px); font-weight: 800; }
+.head p { margin-top: 12px; color: var(--muted); max-width: 52ch; }
+.pills { display: flex; flex-wrap: wrap; gap: 8px; }
+.pill {
+  padding: 10px 18px; border-radius: 999px; border: 1.5px solid var(--line); background: #fff;
+  font: 600 14px/1 var(--body); cursor: pointer; transition: all .2s;
+}
+.pill:hover { border-color: var(--ink); }
+.pill[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: #fff; }
+
+/* products */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 28px 22px; }
+.card { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.tile {
+  position: relative; aspect-ratio: 1; border-radius: 24px; display: grid; place-items: center; overflow: hidden;
+  transition: transform .35s cubic-bezier(.2, .8, .2, 1);
+}
+.card:hover .tile { transform: translateY(-4px); }
+.tile svg { width: 64%; height: 64%; filter: drop-shadow(0 10px 10px rgba(17, 32, 26, 0.10)); }
+.tag {
+  position: absolute; top: 14px; left: 14px; padding: 6px 11px; border-radius: 999px;
+  background: #fff; font: 700 11px/1 var(--body); letter-spacing: 0.06em; text-transform: uppercase;
+}
+.info { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.info h3 { font-size: 21px; font-weight: 700; letter-spacing: -0.02em; }
+.price { font: 700 19px/1 var(--display); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.price small { font: 500 13px/1 var(--body); color: var(--muted); }
+.blurb { color: var(--muted); font-size: 15px; margin-top: -8px; }
+.card .btn { margin-top: auto; }
+
+/* boxes */
+.boxes { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 22px; align-items: stretch; }
+.box { display: flex; flex-direction: column; gap: 20px; padding: 32px; border-radius: 28px; background: var(--soft); min-width: 0; }
+.box.feat { background: var(--green); color: #fff; }
+.box .badge { align-self: flex-start; padding: 7px 12px; border-radius: 999px; background: var(--sun); color: var(--ink); font: 700 11px/1 var(--body); letter-spacing: 0.08em; text-transform: uppercase; }
+.box h3 { font-size: 28px; font-weight: 800; }
+.box .amt { font: 800 46px/1 var(--display); letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
+.box .amt small { font: 500 15px/1 var(--body); letter-spacing: 0; opacity: .7; }
+.box ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; font-size: 15px; }
+.box li { display: flex; gap: 10px; align-items: flex-start; }
+.box li svg { width: 18px; height: 18px; flex: none; margin-top: 3px; }
+.box .grow { flex: 1; }
+.box.feat .btn.primary { background: #fff; color: var(--green-d); }
+.box.feat .btn.primary:hover { background: var(--soft); }
+.box:not(.feat) .btn { background: var(--ink); color: #fff; }
+.box:not(.feat) .btn:hover { background: #000; }
+.minis { display: flex; gap: 6px; }
+.minis svg { width: 38px; height: 38px; }
+
+/* steps */
+.steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 40px; counter-reset: s; }
+.steps li { counter-increment: s; display: grid; gap: 14px; align-content: start; }
+.steps li::before {
+  content: counter(s); width: 44px; height: 44px; border-radius: 50%; background: var(--green-soft); color: var(--green-d);
+  display: grid; place-items: center; font: 800 18px/1 var(--display);
+}
+.steps h3 { font-size: 22px; font-weight: 700; }
+.steps p { color: var(--muted); max-width: 34ch; }
+
+/* faq */
+.faq { max-width: 760px; }
+details { border-top: 1px solid var(--line); }
+details:last-child { border-bottom: 1px solid var(--line); }
+summary {
+  list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 20px;
+  padding: 22px 0; font: 700 19px/1.3 var(--display); letter-spacing: -0.015em;
+}
+summary::-webkit-details-marker { display: none; }
+summary::after { content: "+"; flex: none; width: 32px; height: 32px; border-radius: 50%; background: var(--soft); display: grid; place-items: center; font: 500 20px/1 var(--body); transition: transform .25s, background .2s; }
+details[open] summary::after { transform: rotate(45deg); background: var(--green-soft); }
+details p { padding: 0 52px 24px 0; color: var(--muted); }
+
+/* footer */
+footer { margin-top: 24px; padding-block: 48px 40px; border-top: 1px solid var(--line); display: grid; gap: 28px; }
+.foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 24px; }
+.foot p { color: var(--muted); max-width: 40ch; margin-top: 12px; font-size: 15px; }
+.foot nav { display: flex; flex-wrap: wrap; gap: 8px 26px; font-size: 15px; font-weight: 500; align-self: start; }
+.foot nav a { text-decoration: none; color: var(--muted); }
+.foot nav a:hover { color: var(--ink); }
+.demo { font-size: 13px; color: var(--muted); padding: 14px 16px; background: var(--soft); border-radius: 14px; }
+
+/* ---------- cart drawer ---------- */
+.overlay { position: fixed; inset: 0; z-index: 40; background: rgba(17, 32, 26, 0.42); opacity: 0; transition: opacity .25s; }
+.overlay.show { opacity: 1; }
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 41; width: min(440px, 100vw);
+  background: #fff; display: flex; flex-direction: column; transform: translateX(100%); transition: transform .3s cubic-bezier(.2, .8, .2, 1);
+  box-shadow: -20px 0 60px rgba(17, 32, 26, 0.18);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.drawer.show { transform: none; }
+.dhead { display: flex; align-items: center; justify-content: space-between; padding: 22px 24px; border-bottom: 1px solid var(--line); }
+.dhead h2 { font-size: 24px; font-weight: 800; }
+.x { width: 40px; height: 40px; border-radius: 50%; border: 1.5px solid var(--line); background: #fff; cursor: pointer; display: grid; place-items: center; }
+.x:hover { border-color: var(--ink); }
+.x svg { width: 16px; height: 16px; }
+.dbody { flex: 1; overflow-y: auto; padding: 8px 24px; }
+.dfoot { padding: 20px 24px 24px; border-top: 1px solid var(--line); display: grid; gap: 14px; }
+.ship { display: grid; gap: 8px; font-size: 14px; color: var(--muted); }
+.ship b { color: var(--ink); }
+.meter { height: 8px; border-radius: 8px; background: var(--soft); overflow: hidden; }
+.meter i { display: block; height: 100%; width: 0; background: var(--green); border-radius: 8px; transition: width .35s cubic-bezier(.2, .8, .2, 1); }
+.rows { display: grid; gap: 8px; font-size: 15px; }
+.rows div { display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; }
+.rows .tot { padding-top: 10px; border-top: 1px solid var(--line); font: 700 19px/1.2 var(--display); }
+.line { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.line:last-child { border-bottom: 0; }
+.thumb { width: 64px; height: 64px; border-radius: 16px; display: grid; place-items: center; }
+.thumb svg { width: 72%; height: 72%; }
+.lname { font-weight: 700; line-height: 1.3; }
+.lsub { font-size: 13px; color: var(--muted); }
+.stepper { margin-top: 8px; display: inline-flex; align-items: center; border: 1.5px solid var(--line); border-radius: 999px; }
+.stepper button { width: 32px; height: 32px; border: 0; background: none; cursor: pointer; font-size: 18px; line-height: 1; border-radius: 50%; }
+.stepper button:hover { background: var(--soft); }
+.stepper span { min-width: 26px; text-align: center; font-weight: 700; font-size: 14px; font-variant-numeric: tabular-nums; }
+.lprice { font-weight: 700; font-variant-numeric: tabular-nums; align-self: start; }
+.rm { display: block; margin-top: 8px; margin-left: auto; border: 0; background: none; cursor: pointer; font-size: 13px; color: var(--muted); text-decoration: underline; text-underline-offset: 3px; }
+.rm:hover { color: var(--coral); }
+.empty { display: grid; justify-items: center; gap: 14px; text-align: center; padding: 56px 12px; color: var(--muted); }
+.empty svg { width: 96px; height: 96px; }
+.empty h3 { color: var(--ink); font-size: 22px; }
+
+.form { display: grid; gap: 16px; padding-block: 20px; }
+.field { display: grid; gap: 6px; }
+.field label { font-weight: 600; font-size: 14px; }
+.field input { font: 500 16px/1.2 var(--body); padding: 14px 16px; border-radius: 14px; border: 1.5px solid var(--line); background: #fff; color: var(--ink); width: 100%; }
+.field input:focus { outline: none; border-color: var(--green); box-shadow: 0 0 0 4px var(--green-soft); }
+.field input[aria-invalid="true"] { border-color: var(--coral); }
+.field .err { font-size: 13px; color: #c63a29; min-height: 0; }
+.two { display: grid; grid-template-columns: 1fr 120px; gap: 12px; }
+.back { border: 0; background: none; cursor: pointer; font-weight: 600; font-size: 14px; color: var(--muted); padding: 8px 0; text-decoration: underline; text-underline-offset: 3px; justify-self: start; }
+.done { display: grid; justify-items: center; gap: 14px; text-align: center; padding: 48px 8px; }
+.done .ok { width: 72px; height: 72px; border-radius: 50%; background: var(--green-soft); color: var(--green); display: grid; place-items: center; }
+.done .ok svg { width: 34px; height: 34px; }
+.done h3 { font-size: 28px; }
+.done p { color: var(--muted); max-width: 32ch; }
+.done .num { font: 700 15px/1 var(--display); letter-spacing: 0.08em; padding: 10px 16px; background: var(--soft); border-radius: 999px; }
+
+.toast {
+  position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); z-index: 60; transform: translate(-50%, 24px);
+  background: var(--ink); color: #fff; padding: 14px 20px; border-radius: 999px; font-weight: 600; font-size: 14px;
+  opacity: 0; pointer-events: none; transition: opacity .25s, transform .25s; max-width: calc(100vw - 32px); text-align: center;
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* ---------- motion ---------- */
+@media (prefers-reduced-motion: no-preference) {
+  .heroart svg.f { animation: bob 7s ease-in-out infinite; }
+  .heroart svg.f:nth-of-type(2) { animation-delay: -1.4s; }
+  .heroart svg.f:nth-of-type(3) { animation-delay: -2.8s; }
+  .heroart svg.f:nth-of-type(4) { animation-delay: -4.2s; }
+  .heroart svg.f:nth-of-type(5) { animation-delay: -5.6s; }
+  @keyframes bob { 50% { transform: translateY(-10px) rotate(2deg); } }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .overlay, .drawer, .toast, .meter i, .tile { transition: none; }
+}
+
+/* ---------- small screens ---------- */
+@media (max-width: 860px) {
+  .hero { grid-template-columns: minmax(0, 1fr); gap: 40px; padding-block: 44px 64px; }
+  .heroart { max-width: 420px; }
+  nav.links { display: none; }
+  section.block { padding-block: 64px; }
+  .grid { gap: 24px 16px; }
+}
+@media (max-width: 520px) {
+  body { padding-inline: 16px; }
+  header.top { margin-inline: -16px; padding-inline: 16px; }
+  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .info { flex-direction: column; gap: 6px; }
+  .info h3 { font-size: 18px; }
+  .blurb { display: none; }
+  .tag { top: 10px; left: 10px; padding: 5px 9px; font-size: 10px; }
+  .box { padding: 26px; }
+  details p { padding-right: 0; }
+  .two { grid-template-columns: 1fr 100px; }
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap bar">
+    <a class="logo" href="#top" aria-label="Ripe and Co. home">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="18" r="11" fill="#1b7b4a"/><path d="M16 8c0-4 2-6 5-7 1 4-1 7-5 7z" fill="#4fbf7f"/><ellipse cx="12" cy="15" rx="2.2" ry="4" fill="#fff" opacity=".28" transform="rotate(20 12 15)"/></svg>
+      Ripe &amp; Co.
+    </a>
+    <nav class="links" aria-label="Main">
+      <a href="#shop">Shop</a>
+      <a href="#boxes">Boxes</a>
+      <a href="#how">How it works</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <button class="cartbtn" id="openCart" type="button" aria-label="Open cart">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 8h14l-1.2 11a2 2 0 0 1-2 1.8H8.2a2 2 0 0 1-2-1.8L5 8z"/><path d="M9 8V6.5a3 3 0 0 1 6 0V8"/></svg>
+      Cart <span class="count" id="count" data-zero="true">0</span>
+    </button>
+  </div>
+</header>
+
+<main id="top">
+  <div class="wrap">
+    <section class="hero" aria-labelledby="h1">
+      <div>
+        <span class="eyebrow">Fresh fruit, delivered</span>
+        <h1 id="h1">Fruit that <em>tastes</em> the way it should.</h1>
+        <p class="lead">We buy from growers at peak ripeness and bring it to your door the next morning. No waxy shelves, no mystery bruises.</p>
+        <div class="cta">
+          <a class="btn primary" href="#shop">Shop fruit</a>
+          <a class="btn ghost" href="#boxes">See weekly boxes</a>
+        </div>
+        <ul class="perks">
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Next-day delivery</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Free over $35</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Plastic-free packaging</li>
+        </ul>
+      </div>
+      <div class="heroart" id="heroart" aria-hidden="true"></div>
+    </section>
+  </div>
+
+  <div class="wrap">
+    <section class="block" id="shop" aria-labelledby="shopTitle">
+      <div class="head">
+        <div>
+          <h2 id="shopTitle">Shop fruit</h2>
+          <p>Sold by the pound unless it says otherwise. Add what you like, we pick it the day before it ships.</p>
+        </div>
+        <div class="pills" id="pills" role="group" aria-label="Filter by type"></div>
+      </div>
+      <div class="grid" id="grid"></div>
+    </section>
+
+    <section class="block" id="boxes" aria-labelledby="boxTitle">
+      <div class="head">
+        <div>
+          <h2 id="boxTitle">Weekly fruit boxes</h2>
+          <p>A mix chosen by what is best that week. Pause or skip any delivery.</p>
+        </div>
+      </div>
+      <div class="boxes" id="boxGrid"></div>
+    </section>
+
+    <section class="block" id="how" aria-labelledby="howTitle">
+      <div class="head"><div><h2 id="howTitle">How it works</h2></div></div>
+      <ol class="steps">
+        <li><h3>Choose your fruit</h3><p>Pick single fruits or a weekly box. Prices are shown per pound or per item, so you always know what you pay.</p></li>
+        <li><h3>We pick and pack</h3><p>Orders are picked fresh the day before delivery and packed in recyclable paper and cardboard.</p></li>
+        <li><h3>It arrives next morning</h3><p>Delivered to your door before noon. Anything not perfect, we replace it or refund it.</p></li>
+      </ol>
+    </section>
+
+    <section class="block" id="faq" aria-labelledby="faqTitle">
+      <div class="head"><div><h2 id="faqTitle">Questions</h2></div></div>
+      <div class="faq">
+        <details><summary>When will my order arrive?</summary><p>Orders placed before 6 pm arrive the next morning. We deliver Tuesday to Saturday.</p></details>
+        <details><summary>How much is delivery?</summary><p>Delivery is $4.99, and free when your order is $35 or more.</p></details>
+        <details><summary>What if my fruit is not good?</summary><p>Tell us within 24 hours and we will send a replacement or refund the item. You do not need to send anything back.</p></details>
+        <details><summary>Can I skip or pause a weekly box?</summary><p>Yes. You can skip a week, pause, or cancel at any time before the Sunday cutoff.</p></details>
+        <details><summary>Is the fruit organic?</summary><p>Some of it is, and it is marked on the product. We buy from growers we know and tell you where each fruit comes from.</p></details>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer class="wrap">
+  <div class="foot">
+    <div>
+      <a class="logo" href="#top">Ripe &amp; Co.</a>
+      <p>Fresh fruit from growers we know, delivered the next morning.</p>
+    </div>
+    <nav aria-label="Footer"><a href="#shop">Shop</a><a href="#boxes">Boxes</a><a href="#how">How it works</a><a href="#faq">FAQ</a></nav>
+  </div>
+  <p class="demo">This is a demo store. Checkout works, but no payment is taken and no order is placed.</p>
+</footer>
+
+<!-- cart drawer -->
+<div class="overlay" id="overlay" hidden></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle" hidden>
+  <div class="dhead">
+    <h2 id="drawerTitle">Your cart</h2>
+    <button class="x" id="closeCart" type="button" aria-label="Close cart">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div id="dcontent" style="display:flex;flex-direction:column;flex:1;min-height:0"></div>
+</aside>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ---------- fruit artwork (flat vector, one visual language) ---------- */
+  var ART = {
+    apple: '<ellipse cx="50" cy="93" rx="26" ry="3.5" fill="#11201a" opacity=".07"/><path d="M50 31c-9-8-30-6-33 17-3 22 11 42 25 42 5 0 6-2 8-2s3 2 8 2c14 0 28-20 25-42-3-23-24-25-33-17z" fill="#e5383b"/><path d="M50 31c0-8 3-14 9-18" stroke="#6b4423" stroke-width="3.5" stroke-linecap="round" fill="none"/><path d="M54 23c6-8 16-8 20-4-4 6-13 9-20 4z" fill="#4c9f50"/><ellipse cx="33" cy="52" rx="4.5" ry="10" fill="#fff" opacity=".3" transform="rotate(14 33 52)"/>',
+    orange: '<ellipse cx="50" cy="93" rx="26" ry="3.5" fill="#11201a" opacity=".07"/><circle cx="50" cy="56" r="35" fill="#ff9a1f"/><ellipse cx="37" cy="43" rx="7" ry="12" fill="#fff" opacity=".28" transform="rotate(25 37 43)"/><circle cx="50" cy="22" r="3.2" fill="#3f8f46"/><path d="M52 21c6-8 15-8 19-4-4 6-13 9-19 4z" fill="#4c9f50"/>',
+    strawberry: '<ellipse cx="50" cy="94" rx="24" ry="3.5" fill="#11201a" opacity=".07"/><path d="M50 91C28 81 13 57 17 41c3-10 17-12 33-8 16-4 30-2 33 8 4 16-11 40-33 50z" fill="#e63950"/><g fill="#ffd76a"><ellipse cx="34" cy="48" rx="1.7" ry="2.7"/><ellipse cx="50" cy="46" rx="1.7" ry="2.7"/><ellipse cx="66" cy="48" rx="1.7" ry="2.7"/><ellipse cx="28" cy="60" rx="1.7" ry="2.7"/><ellipse cx="42" cy="59" rx="1.7" ry="2.7"/><ellipse cx="58" cy="59" rx="1.7" ry="2.7"/><ellipse cx="72" cy="60" rx="1.7" ry="2.7"/><ellipse cx="36" cy="71" rx="1.7" ry="2.7"/><ellipse cx="50" cy="70" rx="1.7" ry="2.7"/><ellipse cx="64" cy="71" rx="1.7" ry="2.7"/><ellipse cx="44" cy="81" rx="1.7" ry="2.7"/><ellipse cx="56" cy="81" rx="1.7" ry="2.7"/></g><path d="M30 34c6-7 14-7 20 0-6 5-14 5-20 0zM50 34c6-7 14-7 20 0-6 5-14 5-20 0z" fill="#4c9f50"/><path d="M50 34v-10" stroke="#3f8f46" stroke-width="3.5" stroke-linecap="round"/><ellipse cx="29" cy="44" rx="3" ry="7" fill="#fff" opacity=".28" transform="rotate(12 29 44)"/>',
+    blueberry: '<ellipse cx="50" cy="94" rx="30" ry="3.5" fill="#11201a" opacity=".07"/><circle cx="33" cy="66" r="19" fill="#4361ee"/><circle cx="67" cy="66" r="19" fill="#3a56d4"/><circle cx="50" cy="38" r="19" fill="#4f6bf0"/><g fill="#2a3fa8"><circle cx="33" cy="60" r="4.5"/><circle cx="67" cy="60" r="4.5"/><circle cx="50" cy="32" r="4.5"/></g><g fill="#fff" opacity=".3"><ellipse cx="25" cy="72" rx="3" ry="5" transform="rotate(20 25 72)"/><ellipse cx="59" cy="72" rx="3" ry="5" transform="rotate(20 59 72)"/><ellipse cx="42" cy="44" rx="3" ry="5" transform="rotate(20 42 44)"/></g>',
+    lemon: '<ellipse cx="50" cy="90" rx="30" ry="3.5" fill="#11201a" opacity=".07"/><path d="M8 54c0-6 6-10 13-12 10-15 48-15 58 0 7 2 13 6 13 12s-6 10-13 12c-10 15-48 15-58 0-7-2-13-6-13-12z" fill="#ffd23f"/><ellipse cx="36" cy="44" rx="9" ry="5" fill="#fff" opacity=".35" transform="rotate(-15 36 44)"/><path d="M62 27c5-8 14-9 19-6-3 7-12 10-19 6z" fill="#4c9f50"/><path d="M62 28c-2 3-4 6-6 10" stroke="#3f8f46" stroke-width="2.6" stroke-linecap="round" fill="none"/>',
+    banana: '<ellipse cx="50" cy="93" rx="30" ry="3.5" fill="#11201a" opacity=".07"/><path d="M14 30c-2 30 16 56 46 58 14 1 26-6 32-18-14 8-30 8-44-2C30 56 22 44 22 30c0-4-8-5-8 0z" fill="#ffd23f"/><path d="M22 32c2 14 10 26 22 34 12 8 28 9 42 3" stroke="#f0b800" stroke-width="3" stroke-linecap="round" fill="none"/><path d="M14 30c0-5 8-4 8 0l-1 6c-3-1-6-1-8 0z" fill="#8a5a2b"/><path d="M89 71c-2 5-5 9-9 12l3 4c5-3 9-8 10-13z" fill="#8a5a2b"/><ellipse cx="34" cy="48" rx="2.5" ry="8" fill="#fff" opacity=".35" transform="rotate(-25 34 48)"/>',
+    kiwi: '<ellipse cx="50" cy="93" rx="28" ry="3.5" fill="#11201a" opacity=".07"/><circle cx="50" cy="54" r="38" fill="#8a5a2b"/><circle cx="50" cy="54" r="33" fill="#8bc34a"/><circle cx="50" cy="54" r="22" fill="#a9d95b"/><ellipse cx="50" cy="54" rx="9" ry="9" fill="#f4f9d8"/><g fill="#243016"><ellipse cx="50" cy="38" rx="1.8" ry="3"/><ellipse cx="50" cy="70" rx="1.8" ry="3"/><ellipse cx="34" cy="54" rx="3" ry="1.8"/><ellipse cx="66" cy="54" rx="3" ry="1.8"/><ellipse cx="39" cy="43" rx="1.8" ry="3" transform="rotate(-45 39 43)"/><ellipse cx="61" cy="43" rx="1.8" ry="3" transform="rotate(45 61 43)"/><ellipse cx="39" cy="65" rx="1.8" ry="3" transform="rotate(45 39 65)"/><ellipse cx="61" cy="65" rx="1.8" ry="3" transform="rotate(-45 61 65)"/></g>',
+    peach: '<ellipse cx="50" cy="93" rx="26" ry="3.5" fill="#11201a" opacity=".07"/><path d="M50 26c-20-8-36 6-36 28 0 20 15 36 36 36s36-16 36-36c0-22-16-36-36-28z" fill="#ff9c7a"/><path d="M50 26c-6 10-6 30 0 62" stroke="#f0775a" stroke-width="3" stroke-linecap="round" fill="none"/><path d="M50 26c-20-8-36 6-36 28 0 6 1 11 4 16 6-22 16-36 32-44z" fill="#ffc2a8" opacity=".55"/><path d="M50 26c0-6 2-10 6-13" stroke="#6b4423" stroke-width="3" stroke-linecap="round" fill="none"/><path d="M54 20c6-8 17-8 21-3-4 7-14 10-21 3z" fill="#4c9f50"/>'
+  };
+  var NS = 'http://www.w3.org/2000/svg';
+  function art(id, extra) {
+    return '<svg viewBox="0 0 100 100" xmlns="' + NS + '" ' + (extra || 'aria-hidden="true"') + '>' + ART[id] + '</svg>';
+  }
+
+  /* ---------- catalog (prices in cents) ---------- */
+  var PRODUCTS = [
+    { id: "strawberries", name: "Strawberries", cat: "Berries", unit: "per lb", price: 599, tint: "#ffe1e6", tag: "Best seller", blurb: "Sweet, fragrant and ripe all the way through." },
+    { id: "blueberries", name: "Blueberries", cat: "Berries", unit: "per pint", price: 499, tint: "#e3e8ff", tag: "", blurb: "Plump and crisp, great fresh or baked." },
+    { id: "oranges", name: "Navel Oranges", cat: "Citrus", unit: "per lb", price: 249, tint: "#ffebd0", tag: "", blurb: "Seedless, juicy and easy to peel." },
+    { id: "lemons", name: "Lemons", cat: "Citrus", unit: "per lb", price: 299, tint: "#fff5c4", tag: "", blurb: "Bright, thin-skinned and full of juice." },
+    { id: "apples", name: "Honeycrisp Apples", cat: "Orchard", unit: "per lb", price: 329, tint: "#ffe4df", tag: "Seasonal", blurb: "Crisp and juicy with a balanced sweetness." },
+    { id: "peaches", name: "Peaches", cat: "Orchard", unit: "per lb", price: 399, tint: "#ffe6d9", tag: "New", blurb: "Soft, fragrant and ready to eat." },
+    { id: "bananas", name: "Bananas", cat: "Tropical", unit: "per lb", price: 79, tint: "#fdf0bf", tag: "", blurb: "Picked green, they ripen on your counter." },
+    { id: "kiwi", name: "Kiwi", cat: "Tropical", unit: "per lb", price: 449, tint: "#e6f4cf", tag: "", blurb: "Tangy-sweet with a bright green center." }
+  ];
+  var BOXES = [
+    { id: "box-small", name: "Small Box", price: 2400, tint: "#e3f2e8", art: "apple", items: ["About 5 lb of fruit", "4 kinds, picked that week", "Good for 1 to 2 people"], minis: ["apple", "orange", "kiwi"] },
+    { id: "box-family", name: "Family Box", price: 3900, tint: "#e3f2e8", art: "strawberry", items: ["About 10 lb of fruit", "6 kinds, picked that week", "Good for a family of 3 to 4", "Berries in every box"], minis: ["strawberry", "peach", "lemon"], feat: true },
+    { id: "box-party", name: "Party Box", price: 6200, tint: "#e3f2e8", art: "blueberry", items: ["About 18 lb of fruit", "8 kinds, picked that week", "Good for gatherings", "Ready to share"], minis: ["blueberry", "banana", "apple"] }
+  ];
+  var FREE_AT = 3500, FEE = 499, MAX_QTY = 20, KEY = "ripe-cart-v1";
+
+  function byId(id) {
+    for (var i = 0; i < PRODUCTS.length; i++) if (PRODUCTS[i].id === id) return { p: PRODUCTS[i], art: id === "oranges" ? "orange" : id === "strawberries" ? "strawberry" : id === "blueberries" ? "blueberry" : id === "lemons" ? "lemon" : id === "apples" ? "apple" : id === "peaches" ? "peach" : id === "bananas" ? "banana" : "kiwi" };
+    for (var j = 0; j < BOXES.length; j++) if (BOXES[j].id === id) return { p: BOXES[j], art: BOXES[j].art, box: true };
+    return null;
+  }
+  function money(c) { return "$" + (c / 100).toFixed(2); }
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+  var CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+
+  /* ---------- cart state ---------- */
+  var cart = {};
+  try {
+    var saved = JSON.parse(localStorage.getItem(KEY) || "{}");
+    Object.keys(saved).forEach(function (k) { if (byId(k) && saved[k] > 0) cart[k] = Math.min(MAX_QTY, saved[k] | 0); });
+  } catch (e) {}
+  function persist() { try { localStorage.setItem(KEY, JSON.stringify(cart)); } catch (e) {} }
+  function totals() {
+    var n = 0, sub = 0;
+    Object.keys(cart).forEach(function (k) { var f = byId(k); n += cart[k]; sub += f.p.price * cart[k]; });
+    var fee = sub === 0 || sub >= FREE_AT ? 0 : FEE;
+    return { n: n, sub: sub, fee: fee, total: sub + fee };
+  }
+
+  /* ---------- hero art ---------- */
+  var hero = document.getElementById("heroart");
+  var pos = [
+    ["strawberry", "left:6%;top:40%;width:34%"], ["orange", "left:36%;top:6%;width:36%"],
+    ["apple", "left:58%;top:36%;width:36%"], ["lemon", "left:30%;top:60%;width:34%"], ["blueberry", "left:64%;top:70%;width:24%"]
+  ];
+  hero.innerHTML = '<div class="disc"></div><div class="ring"></div>' + pos.map(function (p) {
+    return '<svg class="f" viewBox="0 0 100 100" xmlns="' + NS + '" style="' + p[1] + '">' + ART[p[0]] + "</svg>";
+  }).join("");
+
+  /* ---------- shop grid ---------- */
+  var cats = ["All", "Berries", "Citrus", "Orchard", "Tropical"], active = "All";
+  var pills = document.getElementById("pills"), grid = document.getElementById("grid");
+  function drawPills() {
+    pills.innerHTML = cats.map(function (c) {
+      return '<button class="pill" type="button" data-cat="' + c + '" aria-pressed="' + (c === active) + '">' + c + "</button>";
+    }).join("");
+  }
+  function drawGrid() {
+    grid.innerHTML = PRODUCTS.filter(function (p) { return active === "All" || p.cat === active; }).map(function (p) {
+      var f = byId(p.id);
+      return '<article class="card"><div class="tile" style="background:' + p.tint + '">' + (p.tag ? '<span class="tag">' + esc(p.tag) + "</span>" : "") + art(f.art) + "</div>" +
+        '<div class="info"><h3>' + esc(p.name) + '</h3><span class="price">' + money(p.price) + ' <small>' + esc(p.unit) + "</small></span></div>" +
+        '<p class="blurb">' + esc(p.blurb) + "</p>" +
+        '<button class="btn ghost small block" type="button" data-add="' + p.id + '" aria-label="Add ' + esc(p.name) + ' to cart">Add to cart</button></article>';
+    }).join("");
+  }
+  pills.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-cat]"); if (!b) return;
+    active = b.dataset.cat; drawPills(); drawGrid();
+  });
+
+  /* ---------- boxes ---------- */
+  document.getElementById("boxGrid").innerHTML = BOXES.map(function (b) {
+    return '<article class="box' + (b.feat ? " feat" : "") + '">' + (b.feat ? '<span class="badge">Most popular</span>' : '<span class="badge" style="background:#fff">Weekly</span>') +
+      "<h3>" + esc(b.name) + '</h3><div class="amt">' + money(b.price).replace(".00", "") + ' <small>per week</small></div>' +
+      '<div class="minis" aria-hidden="true">' + b.minis.map(function (m) { return art(m); }).join("") + "</div>" +
+      "<ul>" + b.items.map(function (i) { return "<li>" + CHECK + "<span>" + esc(i) + "</span></li>"; }).join("") + "</ul><div class=\"grow\"></div>" +
+      '<button class="btn primary block" type="button" data-add="' + b.id + '" aria-label="Add ' + esc(b.name) + ' to cart">Add to cart</button></article>';
+  }).join("");
+
+  /* ---------- cart UI ---------- */
+  var drawer = document.getElementById("drawer"), overlay = document.getElementById("overlay"), dcontent = document.getElementById("dcontent");
+  var countEl = document.getElementById("count"), toastEl = document.getElementById("toast");
+  var view = "cart", lastFocus = null, toastTimer = null, orderNo = "";
+
+  function toast(msg) {
+    toastEl.textContent = msg; toastEl.classList.add("show");
+    clearTimeout(toastTimer); toastTimer = setTimeout(function () { toastEl.classList.remove("show"); }, 1800);
+  }
+  function updateBadge() {
+    var t = totals(); countEl.textContent = t.n; countEl.dataset.zero = String(t.n === 0);
+    document.getElementById("openCart").setAttribute("aria-label", "Open cart, " + t.n + (t.n === 1 ? " item" : " items"));
+  }
+  function add(id) {
+    cart[id] = Math.min(MAX_QTY, (cart[id] || 0) + 1);
+    persist(); updateBadge();
+    toast("Added " + byId(id).p.name);
+    if (!drawer.hidden) drawCart();
+  }
+  function setQty(id, q) {
+    if (q <= 0) delete cart[id]; else cart[id] = Math.min(MAX_QTY, q);
+    persist(); updateBadge(); drawCart();
+  }
+
+  function drawCart() {
+    var t = totals(), keys = Object.keys(cart);
+    document.getElementById("drawerTitle").textContent = view === "checkout" ? "Checkout" : view === "done" ? "Order placed" : "Your cart";
+
+    if (view === "done") {
+      dcontent.innerHTML = '<div class="dbody"><div class="done"><div class="ok">' + CHECK + '</div><h3>Thank you</h3><p>Your demo order is in. No payment was taken and nothing will be delivered.</p><span class="num">ORDER ' + orderNo + '</span></div></div>' +
+        '<div class="dfoot"><button class="btn primary block" type="button" data-act="close">Keep shopping</button></div>';
+      return;
+    }
+
+    if (!keys.length) {
+      dcontent.innerHTML = '<div class="dbody"><div class="empty">' + art("lemon") + "<h3>Your cart is empty</h3><p>Add some fruit and it will show up here.</p></div></div>" +
+        '<div class="dfoot"><button class="btn primary block" type="button" data-act="close">Browse fruit</button></div>';
+      return;
+    }
+
+    var left = Math.max(0, FREE_AT - t.sub), pct = Math.min(100, Math.round(t.sub / FREE_AT * 100));
+    var summary = '<div class="ship"><span>' + (left > 0 ? "Add <b>" + money(left) + "</b> more for free delivery" : "<b>You get free delivery</b>") + '</span><div class="meter" aria-hidden="true"><i style="width:' + pct + '%"></i></div></div>' +
+      '<div class="rows"><div><span>Subtotal</span><span>' + money(t.sub) + "</span></div><div><span>Delivery</span><span>" + (t.fee ? money(t.fee) : "Free") + '</span></div><div class="tot"><span>Total</span><span>' + money(t.total) + "</span></div></div>";
+
+    if (view === "checkout") {
+      dcontent.innerHTML = '<form class="dbody" id="coform" novalidate><div class="form">' +
+        '<button class="back" type="button" data-act="back">Back to cart</button>' +
+        field("name", "Full name", "text", "name") + field("email", "Email", "email", "email") + field("addr", "Delivery address", "text", "street-address") +
+        '<div class="two">' + field("city", "City", "text", "address-level2") + field("zip", "ZIP", "text", "postal-code") + "</div></div></form>" +
+        '<div class="dfoot">' + summary + '<button class="btn primary block" type="submit" form="coform">Place order, ' + money(t.total) + "</button></div>";
+      return;
+    }
+
+    dcontent.innerHTML = '<div class="dbody">' + keys.map(function (k) {
+      var f = byId(k), p = f.p;
+      return '<div class="line"><div class="thumb" style="background:' + p.tint + '">' + art(f.art) + "</div>" +
+        '<div><div class="lname">' + esc(p.name) + '</div><div class="lsub">' + money(p.price) + (f.box ? " per week" : " " + esc(p.unit)) + "</div>" +
+        '<div class="stepper"><button type="button" data-dec="' + k + '" aria-label="Fewer ' + esc(p.name) + '">&minus;</button><span aria-live="polite">' + cart[k] + '</span><button type="button" data-inc="' + k + '" aria-label="More ' + esc(p.name) + '">+</button></div></div>' +
+        '<div><div class="lprice">' + money(p.price * cart[k]) + '</div><button class="rm" type="button" data-rm="' + k + '">Remove</button></div></div>';
+    }).join("") + '</div><div class="dfoot">' + summary + '<button class="btn primary block" type="button" data-act="checkout">Checkout</button></div>';
+  }
+  function field(id, label, type, ac) {
+    return '<div class="field"><label for="f-' + id + '">' + label + '</label><input id="f-' + id + '" name="' + id + '" type="' + type + '" autocomplete="' + ac + '"><div class="err" id="e-' + id + '" aria-live="polite"></div></div>';
+  }
+
+  function open() {
+    lastFocus = document.activeElement; view = "cart"; drawCart();
+    drawer.hidden = false; overlay.hidden = false;
+    requestAnimationFrame(function () { drawer.classList.add("show"); overlay.classList.add("show"); });
+    document.body.style.overflow = "hidden";
+    setTimeout(function () { document.getElementById("closeCart").focus(); }, 30);
+  }
+  function close() {
+    drawer.classList.remove("show"); overlay.classList.remove("show");
+    document.body.style.overflow = "";
+    setTimeout(function () { drawer.hidden = true; overlay.hidden = true; }, 280);
+    if (lastFocus && lastFocus.focus) lastFocus.focus();
+  }
+
+  document.getElementById("openCart").addEventListener("click", open);
+  document.getElementById("closeCart").addEventListener("click", close);
+  overlay.addEventListener("click", close);
+  document.addEventListener("keydown", function (e) {
+    if (drawer.hidden) return;
+    if (e.key === "Escape") { close(); return; }
+    if (e.key === "Tab") {
+      var f = drawer.querySelectorAll("button, input, [href]"); f = Array.prototype.filter.call(f, function (n) { return !n.disabled && n.offsetParent !== null; });
+      if (!f.length) return;
+      var first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  });
+
+  document.addEventListener("click", function (e) {
+    var a = e.target.closest("[data-add]"); if (a) { add(a.dataset.add); return; }
+    var i = e.target.closest("[data-inc]"); if (i) { setQty(i.dataset.inc, cart[i.dataset.inc] + 1); return; }
+    var d = e.target.closest("[data-dec]"); if (d) { setQty(d.dataset.dec, cart[d.dataset.dec] - 1); return; }
+    var r = e.target.closest("[data-rm]"); if (r) { setQty(r.dataset.rm, 0); return; }
+    var x = e.target.closest("[data-act]"); if (!x) return;
+    if (x.dataset.act === "close") close();
+    if (x.dataset.act === "checkout") { view = "checkout"; drawCart(); var n = document.getElementById("f-name"); if (n) n.focus(); }
+    if (x.dataset.act === "back") { view = "cart"; drawCart(); }
+  });
+
+  document.addEventListener("submit", function (e) {
+    if (e.target.id !== "coform") return;
+    e.preventDefault();
+    var v = {}, bad = false;
+    ["name", "email", "addr", "city", "zip"].forEach(function (k) { v[k] = document.getElementById("f-" + k).value.trim(); });
+    var rules = {
+      name: [v.name.length >= 2, "Enter your full name."],
+      email: [/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v.email), "Enter a valid email, like name@example.com."],
+      addr: [v.addr.length >= 4, "Enter your street address."],
+      city: [v.city.length >= 2, "Enter your city."],
+      zip: [/^\d{5}(-\d{4})?$/.test(v.zip), "Enter a 5 digit ZIP code."]
+    };
+    var firstBad = null;
+    Object.keys(rules).forEach(function (k) {
+      var input = document.getElementById("f-" + k), err = document.getElementById("e-" + k), ok = rules[k][0];
+      input.setAttribute("aria-invalid", String(!ok)); err.textContent = ok ? "" : rules[k][1];
+      if (!ok) { bad = true; if (!firstBad) firstBad = input; }
+    });
+    if (bad) { firstBad.focus(); return; }
+    orderNo = "R-" + Math.random().toString(36).slice(2, 7).toUpperCase();
+    cart = {}; persist(); updateBadge(); view = "done"; drawCart();
+  });
+
+  drawPills(); drawGrid(); updateBadge();
+})();
+</script>
+</body>
+</html>
