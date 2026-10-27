@@ -520,6 +520,22 @@ new("Frame", {
     }),
 })
 
+-- a soft accent highlight along the top edge of the window
+accent(new("Frame", {
+    Size = UDim2.new(1, -40, 0, 1),
+    Position = UDim2.fromOffset(20, 0),
+    BorderSizePixel = 0,
+    Parent = Main,
+}, {
+    new("UIGradient", {
+        Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 1),
+            NumberSequenceKeypoint.new(0.5, 0.15),
+            NumberSequenceKeypoint.new(1, 1),
+        }),
+    }),
+}), "BackgroundColor3")
+
 -- Adapt backdrop: faint haze behind the title
 local Haze = accent(new("Frame", {
     Size = UDim2.new(1, 0, 0, 160),
@@ -2918,6 +2934,16 @@ function Tab:_row(height, name)
         }),
     })
 
+    -- a slim accent bar grows out of the left edge while the row is hovered
+    local hoverBar = accent(new("Frame", {
+        Name = "HoverBar",
+        Size = UDim2.fromOffset(2, 0),
+        AnchorPoint = Vector2.new(0, 0.5),
+        Position = UDim2.fromOffset(0, height / 2),
+        BorderSizePixel = 0,
+        Parent = frame,
+    }, { corner(1) }), "BackgroundColor3")
+
     -- Bubble rows are white-outlined pills; Ambitious rows are dark glass over the backdrop
     onTheme(function()
         -- VX7 rows are glassy with a faint accent edge
@@ -2927,6 +2953,7 @@ function Tab:_row(height, name)
         rowStroke.Color = bubble and Color3.new(1, 1, 1) or vx7 and Theme.Accent or Theme.Stroke
         rowStroke.Transparency = (candy or ambitious) and 0.05 or bubble and 0.4 or vx7 and 0.7 or 0.35
         rowStroke.Thickness = bubble and 1.5 or 1
+        hoverBar.Visible = not bubble
     end)
 
     local hit = new("TextButton", {
@@ -2939,23 +2966,29 @@ function Tab:_row(height, name)
 
     hit.MouseEnter:Connect(function()
         tween(frame, 0.15, { BackgroundColor3 = Theme.RowHover })
+        tween(hoverBar, 0.2, { Size = UDim2.fromOffset(2, math.floor(height * 0.5)) })
         hoverSound()
     end)
     hit.MouseLeave:Connect(function()
         tween(frame, 0.25, { BackgroundColor3 = Theme.Row })
+        tween(hoverBar, 0.25, { Size = UDim2.fromOffset(2, 0) })
     end)
 
-    -- pressing a row nudges it in a hair (about 2%), then it springs back
+    -- pressing a row nudges it in a hair (about 2%), then it springs back.
+    -- this uses a UIScale and never touches Size, because dropdowns and the colour picker animate Size themselves
+    local pressScale = new("UIScale", { Parent = frame })
     local pressed = false
     local function release()
         if not pressed then return end
         pressed = false
-        tween(frame, 0.3, { Size = UDim2.new(1, 0, 0, frame.Size.Y.Offset), Position = UDim2.fromOffset(0, 0) }, Enum.EasingStyle.Back)
+        tween(pressScale, 0.3, { Scale = 1 }, Enum.EasingStyle.Back)
+        tween(frame, 0.3, { Position = UDim2.fromOffset(0, 0) }, Enum.EasingStyle.Back)
     end
     hit.MouseButton1Down:Connect(function()
         if Settings.ReduceMotion then return end
         pressed = true
-        tween(frame, 0.08, { Size = UDim2.new(1, -6, 0, frame.Size.Y.Offset), Position = UDim2.fromOffset(3, 0) })
+        tween(pressScale, 0.08, { Scale = 0.98 })
+        tween(frame, 0.08, { Position = UDim2.fromOffset(3, 0) })
     end)
     hit.MouseButton1Up:Connect(release)
     hit.MouseLeave:Connect(release)
@@ -3091,6 +3124,21 @@ function Tab:Section(text)
         Parent = frame,
     }, { corner(1) })
 
+    -- a thin rule under the header that fades out to the right
+    local underline = new("Frame", {
+        Size = UDim2.new(1, -20, 0, 1),
+        Position = UDim2.new(0, 10, 1, -1),
+        BorderSizePixel = 0,
+        Parent = frame,
+    }, {
+        new("UIGradient", {
+            Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 0.55),
+                NumberSequenceKeypoint.new(1, 1),
+            }),
+        }),
+    })
+
     -- Adapt: muted label with an accent tick; Candy: bold accent heading; Bubble: plain white caps
     -- the header sits low in its row, so every group gets some breathing room above it
     onTheme(function()
@@ -3102,6 +3150,8 @@ function Tab:Section(text)
         sectionStroke.Transparency = vx7 and 0.7 or 1
         rule.Visible = vx7
         rule.BackgroundColor3 = Theme.Accent
+        underline.Visible = not vx7
+        underline.BackgroundColor3 = Theme.Accent
         bar.BackgroundColor3 = Theme.Accent
         bar.Visible = not candy and not bubble and not ambitious
         bar.Size = UDim2.fromOffset(vx7 and 3 or 2, vx7 and 16 or 10)
@@ -3109,13 +3159,13 @@ function Tab:Section(text)
         arrow.Position = vx7 and UDim2.new(1, -8, 0.5, 0) or UDim2.new(1, -4, 1, -9)
         label.TextYAlignment = vx7 and Enum.TextYAlignment.Center or Enum.TextYAlignment.Bottom
         local lx = (candy or ambitious) and 2 or bubble and 6 or vx7 and 20 or 10
-        label.Position = UDim2.fromOffset(lx + (sectionIcon and 13 or 0), vx7 and 0 or -3)
+        label.Position = UDim2.fromOffset(lx + (sectionIcon and 13 or 0), vx7 and 0 or -4)
         label.Font = (candy or ambitious or vx7) and Enum.Font.GothamBlack or Enum.Font.GothamBold
         label.TextSize = (candy or vx7) and 11 or 10
         label.TextColor3 = candy and Theme.Accent or (bubble or ambitious or vx7) and Theme.Text or Theme.SubText
         if sectionIcon then
             sectionIcon.Holder.AnchorPoint = vx7 and Vector2.new(0, 0.5) or Vector2.new(0, 1)
-            sectionIcon.Holder.Position = vx7 and UDim2.new(0, lx, 0.5, 0) or UDim2.new(0, lx, 1, -4)
+            sectionIcon.Holder.Position = vx7 and UDim2.new(0, lx, 0.5, 0) or UDim2.new(0, lx, 1, -5)
             sectionIcon.Set(label.TextColor3, false)
         end
     end)
@@ -3129,6 +3179,23 @@ function Tab:Toggle(o)
     local rowStroke = frame:FindFirstChildOfClass("UIStroke")
     -- keeps the shockwave ring inside the row
     frame.ClipsDescendants = true
+
+    -- a faint accent glow spreads in from the left while the toggle is on
+    local wash = new("Frame", {
+        Size = UDim2.fromScale(0.75, 1),
+        BackgroundColor3 = Theme.Accent,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ZIndex = 0,
+        Parent = frame,
+    }, {
+        new("UIGradient", {
+            Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 0),
+                NumberSequenceKeypoint.new(1, 1),
+            }),
+        }),
+    })
 
     local track = new("Frame", {
         Size = UDim2.fromOffset(34, 18),
@@ -3188,6 +3255,8 @@ function Tab:Toggle(o)
         strip.BackgroundColor3 = Theme.Accent
         trackFill.Color = ColorSequence.new(Theme.Accent, Theme.Secondary)
         trackFill.Enabled = on
+        wash.BackgroundColor3 = Theme.Accent
+        tween(wash, 0.35, { BackgroundTransparency = on and 0.86 or 1 })
 
         -- Bubble swaps the switch for a single dot that lights up
         local bubble = isBubble()
@@ -3328,16 +3397,18 @@ function Tab:Slider(o)
     local frame = self:_row(52, o.Name)
     self:_label(frame, o.Name, 32)
 
+    -- the value sits in a small rounded pill
     local valueLabel = accent(new("TextLabel", {
-        Size = UDim2.fromOffset(80, 32),
-        AnchorPoint = Vector2.new(1, 0),
-        Position = UDim2.new(1, -12, 0, 0),
-        BackgroundTransparency = 1,
+        Size = UDim2.fromOffset(0, 18),
+        AutomaticSize = Enum.AutomaticSize.X,
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, -12, 0, 16),
+        BackgroundTransparency = 0.45,
         Font = Enum.Font.GothamBold,
         TextSize = 12,
-        TextXAlignment = Enum.TextXAlignment.Right,
         Parent = frame,
-    }), "TextColor3")
+    }, { corner(9), pad(0, 0, 9, 9) }), "TextColor3")
+    accent(valueLabel, "BackgroundColor3", "AccentDark")
 
     local bar = new("Frame", {
         Size = UDim2.new(1, -24, 0, 6),
