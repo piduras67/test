@@ -81,13 +81,19 @@ local Settings = {
     Sounds     = true,
     Volume     = 1,
     ToggleKey  = Enum.KeyCode.RightShift,
-    Backdrop   = "Particles", -- Particles, Hearts, Leaves, Matrix, Off
+    Backdrop   = "Particles", -- Particles, Hearts, Leaves, Matrix, Constellation, Rain, Off
     Cursor     = true,
     Intro      = true,  -- animated loading intro on start
     LockScreen = true,  -- swipe-to-unlock screen after the intro
     Rainbow    = false,
     ReduceMotion = false, -- turns off particles, border spin and the big animations
     Aurora     = true,    -- slow drifting glows behind the rows
+    Parallax   = true,    -- aurora, particles and title slide against the cursor
+    Idle       = true,    -- window dims and the aurora breathes after 30s without input
+    Decrypt    = true,    -- row labels scramble into place when you change tab
+    Dissolve   = true,    -- the window breaks into particles on close and re-forms on open
+    Sparks     = true,    -- toggles throw sparks and send a pulse through neighbouring rows
+    SyncTime   = false,   -- accent follows the time of day
     Snap       = true,    -- window snaps to screen edges and the centre line after a drag
     Font       = "Default", -- any Enum.Font name; Default keeps each style's own fonts
     UIScale    = 1,
@@ -719,6 +725,7 @@ do
         Parent = Main,
     })
     Library.AuroraLayer = layer
+    Library.AuroraRings = {}
     local blobs = {}
     for i, spec in ipairs({ { "Accent", 330, 0 }, { "Secondary", 300, 2.1 }, { "Accent", 260, 4.2 } }) do
         local blob = new("Frame", {
@@ -739,6 +746,7 @@ do
                 BorderSizePixel = 0,
                 Parent = blob,
             }, { new("UICorner", { CornerRadius = UDim.new(1, 0) }) })
+            table.insert(Library.AuroraRings, rings[r])
         end
         blobs[i] = { Frame = blob, Rings = rings, Key = spec[1], Phase = spec[3] }
     end
@@ -755,6 +763,265 @@ do
         local t = Settings.ReduceMotion and 0 or os.clock()
         for _, b in ipairs(blobs) do
             b.Frame.Position = UDim2.fromScale(0.5 + 0.42 * math.sin(t * 0.11 + b.Phase), 0.5 + 0.42 * math.cos(t * 0.083 + b.Phase * 1.3))
+        end
+    end)
+end
+
+-- two more backdrops: a constellation that reaches for the cursor, and rain running down the glass
+do
+    Library.FXLayers = {}
+
+    -- the pointer in the window's own (unscaled) pixels, or nil without a mouse
+    function Library.LocalMouse()
+        if not UserInputService.MouseEnabled then return nil end
+        return (UserInputService:GetMouseLocation() - Main.AbsolutePosition) / math.max(HolderScale.Scale, 0.01)
+    end
+end
+
+do
+    local layer = new("Frame", {
+        Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 1,
+        Visible = false,
+        Parent = Main,
+    })
+    Library.FXLayers.Constellation = layer
+
+    local COUNT, LINK, PULL = 22, 84, 130
+    local nodes, lines = {}, {}
+    for i = 1, COUNT do
+        local angle = math.random() * math.pi * 2
+        local speed = 5 + math.random() * 9
+        nodes[i] = {
+            X = math.random(0, WINDOW_W),
+            Y = math.random(0, WINDOW_H),
+            BX = math.cos(angle) * speed,
+            BY = math.sin(angle) * speed,
+            PX = 0,
+            PY = 0,
+            Frame = new("Frame", {
+                Size = UDim2.fromOffset(3, 3),
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                BackgroundColor3 = Theme.Accent,
+                BackgroundTransparency = 0.3,
+                BorderSizePixel = 0,
+                Parent = layer,
+            }, { corner(2) }),
+        }
+    end
+    for i = 1, 64 do
+        lines[i] = new("Frame", {
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            BackgroundColor3 = Theme.Accent,
+            BorderSizePixel = 0,
+            Visible = false,
+            Parent = layer,
+        })
+    end
+    onTheme(function()
+        for _, n in ipairs(nodes) do n.Frame.BackgroundColor3 = Theme.Accent end
+        for _, l in ipairs(lines) do l.BackgroundColor3 = Theme.Accent end
+    end)
+
+    connect(RunService.RenderStepped, function(dt)
+        if not layer.Visible or not Holder.Visible then return end
+        dt = math.min(dt, 0.05)
+        local mouse = Library.LocalMouse()
+        local near = mouse and mouse.X > -20 and mouse.Y > -20 and mouse.X < WINDOW_W + 20 and mouse.Y < WINDOW_H + 20
+        local decay = math.exp(-dt * 2.2)
+
+        for _, n in ipairs(nodes) do
+            local lit = 0.3
+            if near then
+                local dx, dy = mouse.X - n.X, mouse.Y - n.Y
+                local d = math.sqrt(dx * dx + dy * dy)
+                if d < PULL and d > 1 then
+                    -- the pull fades out right next to the cursor so points orbit it instead of piling up
+                    local k = (1 - d / PULL) * math.min(d / 30, 1) * 150 * dt
+                    n.PX += dx / d * k
+                    n.PY += dy / d * k
+                    lit = 0.3 * d / PULL
+                end
+            end
+            n.PX *= decay
+            n.PY *= decay
+            n.X += (n.BX + n.PX) * dt
+            n.Y += (n.BY + n.PY) * dt
+            if n.X < 0 then
+                n.X, n.BX = 0, math.abs(n.BX)
+            elseif n.X > WINDOW_W then
+                n.X, n.BX = WINDOW_W, -math.abs(n.BX)
+            end
+            if n.Y < 0 then
+                n.Y, n.BY = 0, math.abs(n.BY)
+            elseif n.Y > WINDOW_H then
+                n.Y, n.BY = WINDOW_H, -math.abs(n.BY)
+            end
+            n.Frame.Position = UDim2.fromOffset(n.X, n.Y)
+            n.Frame.BackgroundTransparency = lit
+        end
+
+        local used = 0
+        -- the cursor counts as one more point and ties itself to whatever is near
+        if near then
+            for i = 1, COUNT do
+                local n = nodes[i]
+                local dx, dy = n.X - mouse.X, n.Y - mouse.Y
+                local d2 = dx * dx + dy * dy
+                if d2 < PULL * PULL and used < #lines then
+                    local d = math.sqrt(d2)
+                    used += 1
+                    local line = lines[used]
+                    line.Visible = true
+                    line.Position = UDim2.fromOffset(mouse.X + dx / 2, mouse.Y + dy / 2)
+                    line.Size = UDim2.fromOffset(d, 2)
+                    line.Rotation = math.deg(math.atan2(dy, dx))
+                    line.BackgroundTransparency = 1 - (1 - d / PULL) * 0.9
+                end
+            end
+        end
+        for i = 1, COUNT - 1 do
+            local a = nodes[i]
+            for j = i + 1, COUNT do
+                local b = nodes[j]
+                local dx, dy = b.X - a.X, b.Y - a.Y
+                local d2 = dx * dx + dy * dy
+                if d2 < LINK * LINK and used < #lines then
+                    local d = math.sqrt(d2)
+                    local mx, my = (a.X + b.X) / 2, (a.Y + b.Y) / 2
+                    -- links glow brighter the closer their middle is to the cursor
+                    local boost = 0
+                    if near then
+                        boost = math.clamp(1 - math.sqrt((mouse.X - mx) ^ 2 + (mouse.Y - my) ^ 2) / 120, 0, 1)
+                    end
+                    used += 1
+                    local line = lines[used]
+                    line.Visible = true
+                    line.Position = UDim2.fromOffset(mx, my)
+                    line.Size = UDim2.fromOffset(d, boost > 0.45 and 2 or 1)
+                    line.Rotation = math.deg(math.atan2(dy, dx))
+                    line.BackgroundTransparency = 1 - (1 - d / LINK) * (0.35 + 0.6 * boost)
+                end
+            end
+        end
+        for i = used + 1, #lines do
+            if lines[i].Visible then lines[i].Visible = false else break end
+        end
+    end)
+end
+
+do
+    local layer = new("Frame", {
+        Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 1,
+        Visible = false,
+        Parent = Main,
+    })
+    Library.FXLayers.Rain = layer
+
+    local drops = {}
+
+    -- a drop forms, sits for a while, then creeps down the glass, stalling and lurching like a real one
+    local function reset(d, delay)
+        d.State = "grow"
+        d.T = -delay
+        d.W = math.random(4, 7)
+        d.H = d.W + math.random(1, 3)
+        d.X = math.random(12, WINDOW_W - 12)
+        d.Y = math.random(14, WINDOW_H - 60)
+        d.Rest = 0.6 + math.random() * 3
+        d.Vel = 0
+        d.Trail = 0
+        d.Pause = 0
+        d.Frame.Size = UDim2.fromOffset(0, 0)
+        d.Frame.Position = UDim2.fromOffset(d.X, d.Y)
+        d.Trailing.Visible = false
+    end
+
+    for i = 1, 20 do
+        local frame = new("Frame", {
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            BackgroundColor3 = Theme.AccentGlow,
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            Parent = layer,
+        }, {
+            new("UICorner", { CornerRadius = UDim.new(0.5, 0) }),
+            stroke(Color3.new(1, 1, 1), 1, 1),
+        })
+        local glint = new("Frame", {
+            Size = UDim2.fromOffset(2, 2),
+            Position = UDim2.fromScale(0.22, 0.14),
+            BackgroundColor3 = Color3.new(1, 1, 1),
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            Parent = frame,
+        }, { corner(1) })
+        local trailing = new("Frame", {
+            Size = UDim2.fromOffset(2, 0),
+            AnchorPoint = Vector2.new(0.5, 1),
+            BackgroundColor3 = Theme.AccentGlow,
+            BackgroundTransparency = 0.8,
+            BorderSizePixel = 0,
+            Visible = false,
+            Parent = layer,
+        }, {
+            new("UIGradient", {
+                Rotation = 90,
+                Transparency = NumberSequence.new({
+                    NumberSequenceKeypoint.new(0, 1),
+                    NumberSequenceKeypoint.new(1, 0),
+                }),
+            }),
+        })
+        local d = { Frame = frame, Glint = glint, Trailing = trailing, Stroke = frame:FindFirstChildOfClass("UIStroke") }
+        reset(d, math.random() * 4)
+        drops[i] = d
+    end
+    onTheme(function()
+        for _, d in ipairs(drops) do
+            d.Frame.BackgroundColor3 = Theme.AccentGlow
+            d.Trailing.BackgroundColor3 = Theme.AccentGlow
+        end
+    end)
+
+    connect(RunService.RenderStepped, function(dt)
+        if not layer.Visible or not Holder.Visible then return end
+        dt = math.min(dt, 0.05)
+        for _, d in ipairs(drops) do
+            d.T += dt
+            if d.State == "grow" then
+                local a = math.clamp(d.T / 0.9, 0, 1)
+                d.Frame.Size = UDim2.fromOffset(d.W * a, d.H * a)
+                d.Frame.BackgroundTransparency = 1 - 0.22 * a
+                d.Stroke.Transparency = 1 - 0.5 * a
+                d.Glint.BackgroundTransparency = 1 - 0.7 * a
+                if a >= 1 then d.State, d.T = "rest", 0 end
+            elseif d.State == "rest" then
+                if d.T > d.Rest then d.State, d.T = "slide", 0 end
+            elseif d.State == "slide" then
+                d.Pause -= dt
+                if d.Pause <= 0 and math.random() < dt * 0.9 then d.Pause = 0.2 + math.random() * 0.5 end
+                local target = d.Pause > 0 and 0 or 55 + d.W * 6
+                d.Vel += (target - d.Vel) * math.min(dt * 3, 1)
+                d.Y += d.Vel * dt
+                d.Trail = math.min(d.Trail + d.Vel * dt, 110)
+                d.Frame.Position = UDim2.fromOffset(d.X, d.Y)
+                d.Trailing.Visible = d.Trail > 1
+                d.Trailing.Position = UDim2.fromOffset(d.X, d.Y - d.H / 2)
+                d.Trailing.Size = UDim2.fromOffset(2, d.Trail)
+                if d.Y > WINDOW_H + 10 or d.T > 10 then d.State, d.T = "fade", 0 end
+            else
+                local a = math.clamp(d.T / 0.7, 0, 1)
+                d.Frame.BackgroundTransparency = 0.78 + 0.22 * a
+                d.Stroke.Transparency = 0.5 + 0.5 * a
+                d.Glint.BackgroundTransparency = 0.3 + 0.7 * a
+                d.Trailing.BackgroundTransparency = 0.8 + 0.2 * a
+                if a >= 1 then
+                    d.Trailing.BackgroundTransparency = 0.8
+                    reset(d, 0.3 + math.random() * 2)
+                end
+            end
         end
     end)
 end
@@ -880,6 +1147,9 @@ local function applyBackdrop(mode)
     SnowLayer.Visible = not calm and (mode == "Leaves" or mode == "Particles")
     MatrixLayer.Visible = not calm and mode == "Matrix"
     HeartLayer.Visible = not calm and mode == "Hearts"
+    for name, layer in pairs(Library.FXLayers or {}) do
+        layer.Visible = not calm and mode == name
+    end
     for i, f in ipairs(flakes) do
         local frame = f.Frame
         frame.Rotation = 0
@@ -1536,8 +1806,11 @@ local closeTween
 
 local function setVisible(state)
     Library.Visible = state
+    -- the window breaks apart into particles on close and re-forms on open
+    local dissolve = Settings.Dissolve and not Settings.ReduceMotion and Library.Dissolve
     if state then
         Holder.Visible = true
+        if dissolve then dissolve(true) end
         if closeTween then closeTween:Cancel() end
         if Settings.ReduceMotion then
             HolderScale.Scale = Settings.UIScale
@@ -1546,7 +1819,7 @@ local function setVisible(state)
                 HolderScale.Scale = v
             end, 14, 0.45)
         end
-        tween(Main, 0.3, { GroupTransparency = 0 })
+        tween(Main, dissolve and 0.5 or 0.3, { GroupTransparency = 0 })
         tween(Shadow, 0.3, { ImageTransparency = 0.35 })
         if Library.Current and not Library.Searching then animateRows(Library.Current) end
         -- the first time the menu opens, numbers and sliders count up from zero
@@ -1556,6 +1829,18 @@ local function setVisible(state)
                 if element.Intro then task.spawn(element.Intro, element) end
             end
         end
+    elseif dissolve then
+        dissolve(false)
+        stopSpring(HolderScale)
+        closeTween = tween(HolderScale, 0.6, { Scale = Settings.UIScale * 0.94 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+        tween(Shadow, 0.45, { ImageTransparency = 1 })
+        tween(Main, 0.5, { GroupTransparency = 1 }, Enum.EasingStyle.Quad)
+        -- stay visible until the particles are gone, unless the window was reopened or closed again meanwhile
+        Library.CloseId = (Library.CloseId or 0) + 1
+        local id = Library.CloseId
+        task.delay(0.95, function()
+            if not Library.Visible and Library.CloseId == id then Holder.Visible = false end
+        end)
     else
         stopSpring(HolderScale)
         closeTween = tween(HolderScale, 0.25, { Scale = 0.85 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
@@ -2473,6 +2758,295 @@ connect(RunService.RenderStepped, function(dt)
 end)
 
 ------------------------------------------------------------------------
+-- window dissolve, label decrypt, depth parallax, idle mode, clock accent, toggle sparks
+
+-- the window breaks into particles that scatter and fade; opening runs it backwards
+do
+    local function pickColor()
+        local roll = math.random()
+        return roll < 0.5 and Theme.Accent or roll < 0.8 and Theme.Secondary or Theme.AccentGlow
+    end
+
+    function Library.Dissolve(opening)
+        for _ = 1, IS_MOBILE and 36 or 60 do
+            local size = math.random(2, 5)
+            local x, y = math.random(0, WINDOW_W), math.random(0, WINDOW_H)
+            local angle = math.random() * math.pi * 2
+            local dist = 40 + math.random() * 90
+            -- they drift up and outward rather than fall
+            local fx = x + math.cos(angle) * dist
+            local fy = y + math.sin(angle) * dist * 0.7 - 24
+            -- a sweep crosses the window: left to right on close, right to left on open
+            local sweep = (opening and (1 - x / WINDOW_W) or (x / WINDOW_W)) * 0.3
+            local p = new("Frame", {
+                Size = UDim2.fromOffset(size, size),
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                Position = opening and UDim2.fromOffset(fx, fy) or UDim2.fromOffset(x, y),
+                BackgroundColor3 = pickColor(),
+                BackgroundTransparency = 1,
+                BorderSizePixel = 0,
+                Rotation = math.random(0, 90),
+                ZIndex = 60,
+                Parent = Holder,
+            }, { corner(1) })
+            task.delay(sweep, function()
+                if not p.Parent then return end
+                if opening then
+                    tween(p, 0.12, { BackgroundTransparency = 0.1 })
+                    tween(p, 0.5, { Position = UDim2.fromOffset(x, y), Rotation = 0 }, Enum.EasingStyle.Quart)
+                    task.delay(0.42, function()
+                        if p.Parent then tween(p, 0.2, { BackgroundTransparency = 1 }) end
+                    end)
+                else
+                    p.BackgroundTransparency = 0.1
+                    tween(p, 0.6, { Position = UDim2.fromOffset(fx, fy), Rotation = p.Rotation + 180 }, Enum.EasingStyle.Quad)
+                    tween(p, 0.6, { BackgroundTransparency = 1 }, Enum.EasingStyle.Quad)
+                end
+            end)
+            Debris:AddItem(p, 1.4)
+        end
+    end
+end
+
+-- row labels scramble through random characters and lock in from the left, staggered down the page
+do
+    local GLYPHS = "ABCDEFGHJKLMNPQRSTUVWXYZ0123456789#$%&*+<>=?/"
+    local running = {}
+
+    local function noise(chars, revealed)
+        local out = table.create(#chars)
+        for k, c in ipairs(chars) do
+            if k <= revealed or c == " " then
+                out[k] = c
+            else
+                local g = math.random(#GLYPHS)
+                out[k] = GLYPHS:sub(g, g)
+            end
+        end
+        return table.concat(out)
+    end
+
+    function Library.Decrypt(tab)
+        -- a label still mid-scramble from the last tab gets its real text back first
+        for label, entry in pairs(running) do
+            if label.Text == entry.Last then label.Text = entry.Target end
+            running[label] = nil
+        end
+
+        local n = 0
+        for _, row in ipairs(Library.Rows) do
+            local label = row.Label
+            if row.Tab == tab and label and label.Parent and not label.RichText and row.Frame.Visible then
+                n += 1
+                if n > 14 then break end
+                local target = label.Text
+                local count = utf8.len(target)
+                if count and count > 0 and count <= 40 then
+                    local chars = {}
+                    for _, code in utf8.codes(target) do
+                        chars[#chars + 1] = utf8.char(code)
+                    end
+                    local entry = { Target = target, Last = noise(chars, 0) }
+                    running[label] = entry
+                    label.Text = entry.Last
+                    task.delay((n - 1) * 0.045, function()
+                        local steps = 14
+                        for step = 1, steps do
+                            -- stop if a newer decrypt took over, or something else rewrote the label
+                            if running[label] ~= entry or label.Text ~= entry.Last then
+                                if running[label] == entry then running[label] = nil end
+                                return
+                            end
+                            entry.Last = noise(chars, math.floor(count * step / steps))
+                            label.Text = entry.Last
+                            task.wait(0.035)
+                        end
+                        if running[label] == entry then running[label] = nil end
+                    end)
+                end
+            end
+        end
+    end
+end
+
+-- depth parallax: far layers slide against the cursor, nearer ones slide further
+do
+    local layers = {
+        { Library.AuroraLayer, 8 },
+        { SnowLayer, 14 },
+        { HeartLayer, 14 },
+        { MatrixLayer, 14 },
+        { Library.FXLayers.Constellation, 11 },
+        { Library.FXLayers.Rain, 11 },
+        { AdaptHeader, 4 },
+    }
+    local px, py = 0, 0
+
+    connect(RunService.RenderStepped, function(dt)
+        if not Holder.Visible then return end
+        local tx, ty = 0, 0
+        local mouse = Settings.Parallax and not Settings.ReduceMotion and Library.LocalMouse()
+        if mouse then
+            tx = math.clamp((mouse.X - WINDOW_W / 2) / (WINDOW_W / 2), -1, 1)
+            ty = math.clamp((mouse.Y - WINDOW_H / 2) / (WINDOW_H / 2), -1, 1)
+        end
+        local k = math.min(dt * 5, 1)
+        px += (tx - px) * k
+        py += (ty - py) * k
+        for _, entry in ipairs(layers) do
+            entry[1].Position = UDim2.fromOffset(-px * entry[2], -py * entry[2])
+        end
+    end)
+end
+
+-- idle mode: after 30 seconds without input the window dims and the aurora breathes
+do
+    local veil = new("Frame", {
+        Size = UDim2.fromScale(1, 1),
+        BackgroundColor3 = Color3.new(0, 0, 0),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ZIndex = 40,
+        Parent = Main,
+    })
+    Library.LastInput = os.clock()
+    local function wake()
+        Library.LastInput = os.clock()
+    end
+    connect(UserInputService.InputBegan, wake)
+    connect(UserInputService.InputChanged, function(input)
+        local kind = input.UserInputType
+        if kind == Enum.UserInputType.MouseMovement or kind == Enum.UserInputType.MouseWheel or kind == Enum.UserInputType.Touch then
+            wake()
+        end
+    end)
+
+    local idle = false
+    connect(RunService.RenderStepped, function()
+        local now = os.clock()
+        local want = (Settings.Idle and not Settings.ReduceMotion and Library.Visible and Holder.Visible and now - Library.LastInput > 30) and true or false
+        if want ~= idle then
+            idle = want
+            tween(veil, idle and 1.5 or 0.3, { BackgroundTransparency = idle and 0.55 or 1 })
+            if not idle then
+                for _, ring in ipairs(Library.AuroraRings) do
+                    ring.BackgroundTransparency = 0.965
+                end
+            end
+        end
+        if idle then
+            local alpha = 0.962 - 0.04 * (0.5 + 0.5 * math.sin(now * 0.8))
+            for _, ring in ipairs(Library.AuroraRings) do
+                ring.BackgroundTransparency = alpha
+            end
+        end
+    end)
+end
+
+-- time-of-day accent: dawn pink, noon blue, sunset orange, night violet, blended by the real clock
+do
+    local STOPS = {
+        { 0, Color3.fromRGB(150, 110, 255) },
+        { 5, Color3.fromRGB(150, 110, 255) },
+        { 6.5, Color3.fromRGB(255, 140, 190) },
+        { 9, Color3.fromRGB(255, 160, 190) },
+        { 12, Color3.fromRGB(90, 175, 255) },
+        { 16, Color3.fromRGB(100, 170, 255) },
+        { 18.5, Color3.fromRGB(255, 140, 70) },
+        { 20.5, Color3.fromRGB(235, 90, 150) },
+        { 22.5, Color3.fromRGB(150, 110, 255) },
+        { 24, Color3.fromRGB(150, 110, 255) },
+    }
+
+    local function clockAccent()
+        local ok, t = pcall(function()
+            return DateTime.now():ToLocalTime()
+        end)
+        local hour = ok and t.Hour or tonumber(os.date("%H")) or 12
+        local minute = ok and t.Minute or tonumber(os.date("%M")) or 0
+        local h = hour + minute / 60
+        for i = 2, #STOPS do
+            local a, b = STOPS[i - 1], STOPS[i]
+            if h <= b[1] then
+                return a[2]:Lerp(b[2], (h - a[1]) / math.max(b[1] - a[1], 0.001))
+            end
+        end
+        return STOPS[#STOPS][2]
+    end
+
+    local lastSync = -100
+    connect(RunService.Heartbeat, function()
+        if not Settings.SyncTime or Settings.Rainbow then return end
+        local now = os.clock()
+        if Library.SyncNow or now - lastSync > 20 then
+            Library.SyncNow = false
+            lastSync = now
+            Library:SetAccent(clockAccent(), true)
+        end
+    end)
+end
+
+-- turning a toggle on throws sparks from the switch and sends a pulse of light through the rows around it
+function Library.ToggleFX(tab, frame, origin)
+    if not Settings.Sparks or Settings.ReduceMotion then return end
+
+    for _ = 1, 12 do
+        local angle = math.random() * math.pi * 2
+        local reach = 22 + math.random() * 52
+        local life = 0.45 + math.random() * 0.3
+        local spark = new("Frame", {
+            Size = UDim2.fromOffset(3, 3),
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.fromOffset(origin.X, origin.Y),
+            BackgroundColor3 = math.random() < 0.4 and Color3.new(1, 1, 1) or Theme.Accent,
+            BorderSizePixel = 0,
+            Rotation = 45,
+            ZIndex = 4,
+            Parent = frame,
+        })
+        tween(spark, life, {
+            Position = UDim2.fromOffset(origin.X + math.cos(angle) * reach, origin.Y + math.sin(angle) * reach * 0.45 - 4),
+            Size = UDim2.fromOffset(1, 1),
+            BackgroundTransparency = 1,
+        }, Enum.EasingStyle.Quart)
+        Debris:AddItem(spark, life + 0.05)
+    end
+
+    local index
+    for i, item in ipairs(tab.Holders) do
+        if item.Body == frame then
+            index = i
+            break
+        end
+    end
+    if not index then return end
+
+    for step = 1, 4 do
+        for _, dir in ipairs({ -1, 1 }) do
+            local item = tab.Holders[index + dir * step]
+            local body = item and item.Body
+            local roundness = body and body:FindFirstChildOfClass("UICorner")
+            -- headers and other cornerless blocks are skipped; only real rows light up
+            if roundness and item.Holder.Visible then
+                task.delay(step * 0.07, function()
+                    if not body.Parent then return end
+                    local flash = new("Frame", {
+                        Size = UDim2.fromScale(1, 1),
+                        BackgroundColor3 = Theme.Accent,
+                        BackgroundTransparency = 0.8 + step * 0.03,
+                        BorderSizePixel = 0,
+                        ZIndex = 0,
+                        Parent = body,
+                    }, { new("UICorner", { CornerRadius = roundness.CornerRadius }) })
+                    tween(flash, 0.5, { BackgroundTransparency = 1 })
+                    Debris:AddItem(flash, 0.55)
+                end)
+            end
+        end
+    end
+end
+
+------------------------------------------------------------------------
 -- notifications: toasts were removed; Notify stays as a no-op so existing calls are harmless
 
 function Library:Notify() end
@@ -2617,6 +3191,9 @@ function Library:Select(tab, instant)
         tween(tab.Page, 0.45, { Position = UDim2.fromOffset(0, 0) })
     end
     if not instant then animateRows(tab) end
+    if not instant and previous and previous ~= tab and Settings.Decrypt and not Settings.ReduceMotion and not self.Searching and self.Decrypt then
+        self.Decrypt(tab)
+    end
 end
 
 function Library:Search(query)
@@ -3434,6 +4011,7 @@ function Tab:Toggle(o)
         tween(ring, 0.6, { Size = UDim2.fromOffset(340, 340) }, Enum.EasingStyle.Quart)
         tween(ringStroke, 0.6, { Transparency = 1, Thickness = 0.5 }, Enum.EasingStyle.Quart)
         Debris:AddItem(ring, 0.65)
+        Library.ToggleFX(self, frame, center / math.max(HolderScale.Scale, 0.01))
     end
 
     local element = { Value = false }
@@ -4807,6 +5385,55 @@ Visual:Toggle({
 })
 Visual:Section("Effects")
 Visual:Toggle({
+    Name = "Depth Parallax",
+    Default = true,
+    List = false,
+    Callback = function(state)
+        Settings.Parallax = state
+    end,
+})
+Visual:Toggle({
+    Name = "Idle Mode",
+    Default = true,
+    List = false,
+    Callback = function(state)
+        Settings.Idle = state
+    end,
+})
+Visual:Toggle({
+    Name = "Text Decrypt",
+    Default = true,
+    List = false,
+    Callback = function(state)
+        Settings.Decrypt = state
+    end,
+})
+Visual:Toggle({
+    Name = "Dissolve Window",
+    Default = true,
+    List = false,
+    Callback = function(state)
+        Settings.Dissolve = state
+    end,
+})
+Visual:Toggle({
+    Name = "Toggle Sparks",
+    Default = true,
+    List = false,
+    Callback = function(state)
+        Settings.Sparks = state
+    end,
+})
+Visual:Toggle({
+    Name = "Time-of-Day Accent",
+    Default = false,
+    List = false,
+    Callback = function(state)
+        Settings.SyncTime = state
+        Library.SyncNow = state
+    end,
+})
+Visual:Toggle({
     Name = "Mascot",
     Default = false,
     List = false,
@@ -4828,7 +5455,7 @@ Visual:Toggle({
 })
 Visual:Dropdown({
     Name = "Backdrop FX",
-    Options = { "Particles", "Hearts", "Leaves", "Matrix", "Off" },
+    Options = { "Particles", "Hearts", "Leaves", "Matrix", "Constellation", "Rain", "Off" },
     Default = "Particles",
     Callback = function(value)
         applyBackdrop(value)
