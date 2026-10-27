@@ -86,6 +86,8 @@ local Settings = {
     Intro      = true,  -- animated loading intro on start
     LockScreen = true,  -- swipe-to-unlock screen after the intro
     Rainbow    = false,
+    ReduceMotion = false, -- turns off particles, border spin and the big animations
+    Snap       = true,    -- window snaps to screen edges and the centre line after a drag
     Font       = "Default", -- any Enum.Font name; Default keeps each style's own fonts
     UIScale    = 1,
     -- optional backdrops, e.g. "rbxassetid://123456"; leave empty for the built-in gradients
@@ -412,7 +414,7 @@ local function hoverSound() end
 ------------------------------------------------------------------------
 -- dragging
 
-local function makeDraggable(handle, target, onClick)
+local function makeDraggable(handle, target, onClick, onDrop)
     local dragging, moved, dragStart, startPos
 
     handle.InputBegan:Connect(function(input)
@@ -425,7 +427,11 @@ local function makeDraggable(handle, target, onClick)
             if input.UserInputState == Enum.UserInputState.End then
                 dragging = false
                 endConn:Disconnect()
-                if not moved and onClick then onClick() end
+                if not moved and onClick then
+                    onClick()
+                elseif moved and onDrop then
+                    task.delay(0.1, onDrop)
+                end
             end
         end)
     end)
@@ -799,9 +805,10 @@ local LEAF_COLORS = {
 -- the same 30 particles get restyled for leaves and floating particles
 local function applyBackdrop(mode)
     Settings.Backdrop = mode
-    SnowLayer.Visible = mode == "Leaves" or mode == "Particles"
-    MatrixLayer.Visible = mode == "Matrix"
-    HeartLayer.Visible = mode == "Hearts"
+    local calm = Settings.ReduceMotion
+    SnowLayer.Visible = not calm and (mode == "Leaves" or mode == "Particles")
+    MatrixLayer.Visible = not calm and mode == "Matrix"
+    HeartLayer.Visible = not calm and mode == "Hearts"
     for i, f in ipairs(flakes) do
         local frame = f.Frame
         frame.Rotation = 0
@@ -1393,9 +1400,13 @@ local function setVisible(state)
     if state then
         Holder.Visible = true
         if closeTween then closeTween:Cancel() end
-        springTo(HolderScale, HolderScale.Scale, Settings.UIScale, function(v)
-            HolderScale.Scale = v
-        end, 14, 0.45)
+        if Settings.ReduceMotion then
+            HolderScale.Scale = Settings.UIScale
+        else
+            springTo(HolderScale, HolderScale.Scale, Settings.UIScale, function(v)
+                HolderScale.Scale = v
+            end, 14, 0.45)
+        end
         tween(Main, 0.3, { GroupTransparency = 0 })
         tween(Shadow, 0.3, { ImageTransparency = 0.35 })
         if Library.Current and not Library.Searching then animateRows(Library.Current) end
@@ -1418,7 +1429,103 @@ local function setVisible(state)
     play(state and "Open" or "Close")
 end
 
-makeDraggable(Header, Holder)
+do
+    -- after a drag, nudge the window flush to a screen edge or the centre line if it's close
+    local function snapWindow()
+        if not Settings.Snap then return end
+        local view = Gui.AbsoluteSize
+        local pos, size = Holder.AbsolutePosition, Holder.AbsoluteSize
+        local MARGIN, REACH = 12, 18
+
+        local function shift(lo, len, total)
+            local toStart = MARGIN - lo
+            local toEnd = (total - MARGIN) - (lo + len)
+            local toMid = total / 2 - (lo + len / 2)
+            if math.abs(toStart) <= REACH then return toStart end
+            if math.abs(toEnd) <= REACH then return toEnd end
+            if math.abs(toMid) <= REACH then return toMid end
+            return 0
+        end
+
+        local dx, dy = shift(pos.X, size.X, view.X), shift(pos.Y, size.Y, view.Y)
+        if dx ~= 0 or dy ~= 0 then
+            local goal = Holder.Position + UDim2.fromOffset(dx, dy)
+            if Settings.ReduceMotion then
+                Holder.Position = goal
+            else
+                tween(Holder, 0.3, { Position = goal }, Enum.EasingStyle.Back)
+            end
+        end
+    end
+    makeDraggable(Header, Holder, nil, snapWindow)
+end
+
+do
+    -- resize handle in the bottom-right corner: drag it to scale the whole window, keeping the top-left corner put
+    local handle = new("TextButton", {
+        Size = UDim2.fromOffset(16, 16),
+        AnchorPoint = Vector2.new(1, 1),
+        Position = UDim2.new(1, 3, 1, 3),
+        BackgroundTransparency = 1,
+        Text = "",
+        AutoButtonColor = false,
+        ZIndex = 8,
+        Parent = Holder,
+    })
+    local grips = {}
+    for i = 1, 2 do
+        grips[i] = new("Frame", {
+            Size = UDim2.fromOffset(i == 1 and 9 or 5, 2),
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.new(0.5, i == 1 and 1 or 3, 0.5, i == 1 and 1 or 3),
+            Rotation = -45,
+            BackgroundColor3 = Theme.SubText,
+            BorderSizePixel = 0,
+            ZIndex = 8,
+            Parent = handle,
+        }, { corner(1) })
+    end
+
+    local resizing, startPointer, startScale, topLeft = false, nil, 1, nil
+
+    handle.MouseEnter:Connect(function()
+        for _, g in ipairs(grips) do
+            tween(g, 0.15, { BackgroundColor3 = Theme.Accent })
+        end
+    end)
+    handle.MouseLeave:Connect(function()
+        if resizing then return end
+        for _, g in ipairs(grips) do
+            tween(g, 0.2, { BackgroundColor3 = Theme.SubText })
+        end
+    end)
+    handle.InputBegan:Connect(function(input)
+        if not isPointer(input) then return end
+        resizing = true
+        startPointer, startScale, topLeft = input.Position, Settings.UIScale, Holder.AbsolutePosition
+        stopSpring(HolderScale)
+    end)
+    connect(UserInputService.InputChanged, function(input)
+        if not resizing or not isMove(input) then return end
+        local d = input.Position - startPointer
+        -- how far the corner was pulled along the diagonal decides the new size
+        local grow = (d.X / (WINDOW_W * startScale) + d.Y / (WINDOW_H * startScale)) / 2
+        local s = math.clamp(math.floor(startScale * (1 + grow) * 100 + 0.5) / 100, 0.6, 1.3)
+        Settings.UIScale = s
+        HolderScale.Scale = s
+        scaleLabel.Text = math.floor(s * 100 + 0.5) .. "%"
+        Holder.Position = UDim2.fromOffset(topLeft.X + WINDOW_W * s / 2, topLeft.Y + WINDOW_H * s / 2)
+    end)
+    connect(UserInputService.InputEnded, function(input)
+        if resizing and isPointer(input) then
+            resizing = false
+            for _, g in ipairs(grips) do
+                tween(g, 0.2, { BackgroundColor3 = Theme.SubText })
+            end
+            play("Click")
+        end
+    end)
+end
 
 MinButton.MouseEnter:Connect(function()
     tween(MinButton, 0.15, { TextColor3 = Theme.Accent })
@@ -2139,12 +2246,13 @@ connect(RunService.RenderStepped, function(dt)
         end
     end
 
+    local calm = Settings.ReduceMotion
     local t = now % 4.5
     local x = t < 1.6 and (t / 1.6) * 2.4 - 1.2 or 1.2
-    TitleShine.Offset = Vector2.new(x, 0)
-    BorderSpin.Rotation = (now * 45) % 360
+    TitleShine.Offset = Vector2.new(calm and 1.2 or x, 0)
+    BorderSpin.Rotation = calm and 45 or (now * 45) % 360
 
-    if Holder.Visible then
+    if Holder.Visible and not calm then
         local mode = Settings.Backdrop
         if mode == "Leaves" then
             for _, f in ipairs(flakes) do
@@ -2270,6 +2378,7 @@ local NoResults = new("TextLabel", {
 
 -- rows slide in one after another
 function animateRows(tab)
+    if Settings.ReduceMotion then return end
     for i, item in ipairs(tab.Holders) do
         if i > 16 then break end
         item.Body.Position = UDim2.fromOffset(24, 0)
@@ -2330,6 +2439,10 @@ function Library:Select(tab, instant)
     for _, t in ipairs(self.Tabs) do
         local active = t == tab
         t.Page.Visible = active and not self.Searching
+        if t.Icon then
+            t.Icon.Set(tabTextColor(active), not instant)
+            t.Icon.Glow(active and not isBubble(), not instant)
+        end
         -- in Bubble the active button clears its own fill/outline so the green pill shows through
         if instant then
             t.TabButton.TextColor3 = tabTextColor(active)
@@ -2347,7 +2460,7 @@ function Library:Select(tab, instant)
     end
     self:MoveIndicator(instant)
     -- the new page slides in from the side the highlight is travelling toward
-    if not instant and previous and previous ~= tab then
+    if not instant and previous and previous ~= tab and not Settings.ReduceMotion then
         local dir = tab.Index > previous.Index and 1 or -1
         tab.Page.Position = UDim2.fromOffset(dir * 70, 0)
         tween(tab.Page, 0.45, { Position = UDim2.fromOffset(0, 0) })
@@ -2360,19 +2473,40 @@ function Library:Search(query)
     self.Searching = query ~= ""
     ClearSearch.Visible = self.Searching
 
+    -- rich text needs <, > and & escaped
+    local function esc(str)
+        return (str:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"))
+    end
+
     local found = 0
     for _, row in ipairs(self.Rows) do
-        local match = self.Searching and string.find(string.lower(row.Name), query, 1, true)
-        if match then
+        local from, to
+        if self.Searching then
+            from, to = string.find(string.lower(row.Name), query, 1, true)
+        end
+        if from then
             found += 1
             row.Frame.Parent = Results
             row.Frame.LayoutOrder = row.TabIndex * 1000 + row.Order
             row.Frame.Visible = true
+            -- matched letters in the accent colour, and the tab the result lives in
+            if row.Label then
+                local upper = isBubble()
+                local function cased(part)
+                    return esc(upper and string.upper(part) or part)
+                end
+                row.Label.RichText = true
+                row.Label.Text = cased(row.Name:sub(1, from - 1))
+                    .. string.format('<font color="#%s"><b>%s</b></font>', Theme.Accent:ToHex(), cased(row.Name:sub(from, to)))
+                    .. cased(row.Name:sub(to + 1))
+                    .. string.format('  <font size="9" color="#%s">%s</font>', Theme.SubText:ToHex(), esc(row.Tab.Name or ""))
+            end
         else
             row.Frame.Parent = row.Tab.Page
             row.Frame.LayoutOrder = row.Order
             -- rows inside a folded section stay hidden once the search is cleared
             row.Frame.Visible = not row.Section or row.Section.Open
+            if row.Plain then row.Plain() end
         end
     end
 
@@ -2398,8 +2532,247 @@ ClearSearch.MouseButton1Click:Connect(function()
     SearchBox.Text = ""
 end)
 
-function Library:Tab(name)
+-- recent searches: a short list under the search bar while it's focused and empty
+do
+    Library.Recent = Library.Recent or {}
+    local panel = new("Frame", {
+        BackgroundColor3 = Theme.Panel,
+        Visible = false,
+        ZIndex = 30,
+        ClipsDescendants = true,
+        Parent = Main,
+    }, { corner(10), stroke(Theme.Stroke, 1) })
+
+    local function rebuild()
+        for _, child in ipairs(panel:GetChildren()) do
+            if child:IsA("GuiObject") then child:Destroy() end
+        end
+        local list = Library.Recent
+        if #list == 0 then return 0 end
+
+        new("TextLabel", {
+            Size = UDim2.new(1, -80, 0, 20),
+            Position = UDim2.fromOffset(12, 3),
+            BackgroundTransparency = 1,
+            Text = "RECENT",
+            Font = Enum.Font.GothamBold,
+            TextSize = 10,
+            TextColor3 = Theme.SubText,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            ZIndex = 31,
+            Parent = panel,
+        })
+        local clear = new("TextButton", {
+            Size = UDim2.fromOffset(50, 20),
+            AnchorPoint = Vector2.new(1, 0),
+            Position = UDim2.new(1, -8, 0, 3),
+            BackgroundTransparency = 1,
+            Text = "Clear",
+            Font = Enum.Font.GothamMedium,
+            TextSize = 11,
+            TextColor3 = Theme.SubText,
+            AutoButtonColor = false,
+            ZIndex = 31,
+            Parent = panel,
+        })
+        clear.MouseButton1Click:Connect(function()
+            play("Click")
+            Library.Recent = {}
+            panel.Visible = false
+        end)
+
+        for i, query in ipairs(list) do
+            local b = new("TextButton", {
+                Size = UDim2.new(1, -16, 0, 24),
+                Position = UDim2.fromOffset(8, 24 + (i - 1) * 24),
+                BackgroundColor3 = Theme.RowHover,
+                BackgroundTransparency = 1,
+                Text = query,
+                Font = Enum.Font.GothamMedium,
+                TextSize = 12,
+                TextColor3 = Theme.Text,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                AutoButtonColor = false,
+                ZIndex = 31,
+                Parent = panel,
+            }, { corner(6), pad(0, 0, 8, 0) })
+            b.MouseEnter:Connect(function()
+                tween(b, 0.15, { BackgroundTransparency = 0 })
+            end)
+            b.MouseLeave:Connect(function()
+                tween(b, 0.2, { BackgroundTransparency = 1 })
+            end)
+            b.MouseButton1Click:Connect(function()
+                play("Click")
+                panel.Visible = false
+                SearchBox.Text = query
+            end)
+        end
+        return #list
+    end
+
+    local function show()
+        if SearchBox.Text ~= "" then
+            panel.Visible = false
+            return
+        end
+        local count = rebuild()
+        if count == 0 then
+            panel.Visible = false
+            return
+        end
+        panel.Position = UDim2.fromOffset(12, SearchBar.Position.Y.Offset + 34)
+        panel.Size = UDim2.new(1, -24, 0, 24 + count * 24 + 6)
+        panel.Visible = true
+    end
+
+    SearchBox.Focused:Connect(show)
+    SearchBox:GetPropertyChangedSignal("Text"):Connect(function()
+        if SearchBox.Text ~= "" then
+            panel.Visible = false
+        elseif SearchBox:IsFocused() then
+            show()
+        end
+    end)
+    SearchBox.FocusLost:Connect(function()
+        local query = (SearchBox.Text:gsub("^%s+", ""):gsub("%s+$", ""))
+        if #query >= 2 then
+            local list = Library.Recent
+            for i = #list, 1, -1 do
+                if string.lower(list[i]) == string.lower(query) then table.remove(list, i) end
+            end
+            table.insert(list, 1, query)
+            while #list > 5 do table.remove(list) end
+        end
+        -- a short delay so clicking an entry still registers before the list closes
+        task.delay(0.25, function()
+            panel.Visible = false
+        end)
+    end)
+end
+
+-- tiny vector icons drawn from frames, so there are no image ids to go missing.
+-- kind: move, target, keyboard, gamepad, eye or sliders. An "rbxassetid://..." string uses that image instead.
+function Library:MakeIcon(kind, parent, px)
+    local k = px / 14
+    local holder = new("Frame", {
+        Size = UDim2.fromOffset(px, px),
+        BackgroundTransparency = 1,
+        Parent = parent,
+    })
+
+    -- soft glow behind the icon, lit while its tab is active (made first so it sits underneath)
+    local glow = new("Frame", {
+        Size = UDim2.fromOffset(px + 10, px + 10),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5),
+        BackgroundColor3 = Theme.Accent,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Parent = holder,
+    }, { new("UICorner", { CornerRadius = UDim.new(1, 0) }) })
+
+    local fills, strokes, images = {}, {}, {}
+
+    -- a filled bar or dot centred on (cx, cy); round = true makes it a pill, a number is a corner radius
+    local function bar(cx, cy, w, h, rot, round)
+        local f = new("Frame", {
+            Size = UDim2.fromOffset(w * k, h * k),
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.fromOffset(cx * k, cy * k),
+            Rotation = rot or 0,
+            BorderSizePixel = 0,
+            Parent = holder,
+        }, { new("UICorner", { CornerRadius = round == true and UDim.new(1, 0) or UDim.new(0, (round or 0) * k) }) })
+        table.insert(fills, f)
+    end
+
+    -- an outlined shape
+    local function ring(cx, cy, w, h, thick, round)
+        local f = new("Frame", {
+            Size = UDim2.fromOffset(w * k, h * k),
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.fromOffset(cx * k, cy * k),
+            BackgroundTransparency = 1,
+            Parent = holder,
+        }, {
+            new("UICorner", { CornerRadius = round == true and UDim.new(1, 0) or UDim.new(0, (round or 0) * k) }),
+            new("UIStroke", { Thickness = math.max(thick * k, 1), ApplyStrokeMode = Enum.ApplyStrokeMode.Border }),
+        })
+        table.insert(strokes, f:FindFirstChildOfClass("UIStroke"))
+    end
+
+    if type(kind) == "string" and string.find(kind, "rbxassetid", 1, true) then
+        table.insert(images, new("ImageLabel", {
+            Size = UDim2.fromScale(1, 1),
+            BackgroundTransparency = 1,
+            Image = kind,
+            ScaleType = Enum.ScaleType.Fit,
+            Parent = holder,
+        }))
+    elseif kind == "move" then
+        for _, ox in ipairs({ 1, 6.5 }) do
+            bar(ox + 3, 4, 7, 2, 45, 1)
+            bar(ox + 3, 10, 7, 2, -45, 1)
+        end
+    elseif kind == "target" then
+        ring(7, 7, 10, 10, 1.5, true)
+        bar(7, 1.2, 1.6, 3, 0, 0.8)
+        bar(7, 12.8, 1.6, 3, 0, 0.8)
+        bar(1.2, 7, 3, 1.6, 0, 0.8)
+        bar(12.8, 7, 3, 1.6, 0, 0.8)
+        bar(7, 7, 2.4, 2.4, 0, true)
+    elseif kind == "keyboard" then
+        ring(7, 7, 14, 9, 1.5, 2.5)
+        for _, x in ipairs({ 3.8, 7, 10.2 }) do
+            bar(x, 5.3, 1.8, 1.8, 0, 0.5)
+        end
+        bar(7, 8.6, 6, 1.5, 0, 0.7)
+    elseif kind == "gamepad" then
+        ring(7, 7.5, 14, 9, 1.5, 4.5)
+        bar(4.5, 7.5, 4, 1.5, 0, 0.5)
+        bar(4.5, 7.5, 1.5, 4, 0, 0.5)
+        bar(9.8, 6.4, 2, 2, 0, true)
+        bar(11.6, 8.6, 2, 2, 0, true)
+    elseif kind == "eye" then
+        ring(7, 7, 14, 8.5, 1.5, true)
+        bar(7, 7, 4.2, 4.2, 0, true)
+    else -- sliders
+        local knobs = { 4, 9.5, 5.5 }
+        for i, y in ipairs({ 2.5, 7, 11.5 }) do
+            bar(7, y, 12, 1.4, 0, 0.7)
+            bar(knobs[i], y, 3.6, 3.6, 0, true)
+        end
+    end
+
+    local icon = { Holder = holder }
+
+    function icon.Set(color, animated)
+        for _, f in ipairs(fills) do
+            if animated then tween(f, 0.2, { BackgroundColor3 = color }) else f.BackgroundColor3 = color end
+        end
+        for _, st in ipairs(strokes) do
+            if animated then tween(st, 0.2, { Color = color }) else st.Color = color end
+        end
+        for _, im in ipairs(images) do
+            if animated then tween(im, 0.2, { ImageColor3 = color }) else im.ImageColor3 = color end
+        end
+    end
+
+    function icon.Glow(on, animated)
+        glow.BackgroundColor3 = Theme.Accent
+        local goal = on and 0.82 or 1
+        if animated then tween(glow, 0.25, { BackgroundTransparency = goal }) else glow.BackgroundTransparency = goal end
+    end
+
+    icon.Set(Theme.SubText, false)
+    return icon
+end
+
+-- iconKind is optional: pass "move", "target", "keyboard", "gamepad", "eye", "sliders" or an "rbxassetid://..." image
+function Library:Tab(name, iconKind)
     local page = makePage()
+    local kind = iconKind or ({ MOVEMENT = "move", COMBAT = "target", KBM = "keyboard", CTRL = "gamepad", VISUAL = "eye", SETTINGS = "sliders" })[name]
 
     local btnStroke = stroke(Theme.Stroke, 1, 1)
     local button = new("TextButton", {
@@ -2414,11 +2787,18 @@ function Library:Tab(name)
         Parent = TabList,
     }, {
         btnStroke,
-        pad(0, 0, 2, 2),
+        pad(kind and 14 or 0, 0, 2, 2),
         new("UITextSizeConstraint", { MaxTextSize = 11, MinTextSize = 7 }),
     })
     local btnCorner = corner(8)
     btnCorner.Parent = button
+
+    -- the icon sits above the label; the button's top padding shifts children down, so it's offset back up
+    local icon = kind and Library:MakeIcon(kind, button, 12)
+    if icon then
+        icon.Holder.AnchorPoint = Vector2.new(0.5, 0)
+        icon.Holder.Position = UDim2.new(0.5, 0, 0, 3 - 14)
+    end
 
     -- Candy draws every tab as a little box, Bubble as an outlined pill
     onTheme(function()
@@ -2440,6 +2820,9 @@ function Library:Tab(name)
         Holders = {},
         Order = 0,
         Index = #self.Tabs + 1,
+        Name = name,
+        Icon = icon,
+        IconKind = kind,
     }, Tab)
     table.insert(self.Tabs, tab)
 
@@ -2449,11 +2832,17 @@ function Library:Tab(name)
     end
 
     button.MouseEnter:Connect(function()
-        if self.Current ~= tab then tween(button, 0.15, { TextColor3 = Theme.Text }) end
+        if self.Current ~= tab then
+            tween(button, 0.15, { TextColor3 = Theme.Text })
+            if icon then icon.Set(Theme.Text, true) end
+        end
         hoverSound()
     end)
     button.MouseLeave:Connect(function()
-        if self.Current ~= tab then tween(button, 0.2, { TextColor3 = tabTextColor(false) }) end
+        if self.Current ~= tab then
+            tween(button, 0.2, { TextColor3 = tabTextColor(false) })
+            if icon then icon.Set(tabTextColor(false), true) end
+        end
     end)
     button.MouseButton1Click:Connect(function()
         if self.Searching then
@@ -2556,9 +2945,25 @@ function Tab:_row(height, name)
         tween(frame, 0.25, { BackgroundColor3 = Theme.Row })
     end)
 
+    -- pressing a row nudges it in a hair (about 2%), then it springs back
+    local pressed = false
+    local function release()
+        if not pressed then return end
+        pressed = false
+        tween(frame, 0.3, { Size = UDim2.new(1, 0, 0, frame.Size.Y.Offset), Position = UDim2.fromOffset(0, 0) }, Enum.EasingStyle.Back)
+    end
+    hit.MouseButton1Down:Connect(function()
+        if Settings.ReduceMotion then return end
+        pressed = true
+        tween(frame, 0.08, { Size = UDim2.new(1, -6, 0, frame.Size.Y.Offset), Position = UDim2.fromOffset(3, 0) })
+    end)
+    hit.MouseButton1Up:Connect(release)
+    hit.MouseLeave:Connect(release)
+
     if name then
         table.insert(Library.Rows, {
             Name = name,
+            Body = frame,
             Frame = holder,
             Tab = self,
             TabIndex = self.Index,
@@ -2587,6 +2992,16 @@ function Tab:_label(parent, text, height)
         label.Font = bubble and Enum.Font.GothamBlack or isAmbitious() and Enum.Font.GothamBold or Enum.Font.GothamMedium
         label.Position = UDim2.fromOffset(bubble and 16 or 14, 0)
     end)
+
+    -- search restyles the label (highlight + tab tag), so it keeps a way to put it back
+    local row = Library.Rows[#Library.Rows]
+    if row and row.Frame == parent.Parent and not row.Label then
+        row.Label = label
+        row.Plain = function()
+            label.RichText = false
+            label.Text = isBubble() and string.upper(text) or text
+        end
+    end
     return label
 end
 
@@ -2661,6 +3076,8 @@ function Tab:Section(text)
         TextYAlignment = Enum.TextYAlignment.Bottom,
         Parent = frame,
     })
+    -- each section wears a small copy of its tab's icon
+    local sectionIcon = self.IconKind and Library:MakeIcon(self.IconKind, frame, 9)
 
     -- VX7 draws the header as its own boxed row with a rule on the right
     local sectionStroke = stroke(Theme.Accent, 1, 1)
@@ -2691,10 +3108,16 @@ function Tab:Section(text)
         bar.Position = vx7 and UDim2.new(0, 10, 0.5, 0) or UDim2.new(0, 2, 1, -9)
         arrow.Position = vx7 and UDim2.new(1, -8, 0.5, 0) or UDim2.new(1, -4, 1, -9)
         label.TextYAlignment = vx7 and Enum.TextYAlignment.Center or Enum.TextYAlignment.Bottom
-        label.Position = UDim2.fromOffset((candy or ambitious) and 2 or bubble and 6 or vx7 and 20 or 10, vx7 and 0 or -3)
+        local lx = (candy or ambitious) and 2 or bubble and 6 or vx7 and 20 or 10
+        label.Position = UDim2.fromOffset(lx + (sectionIcon and 13 or 0), vx7 and 0 or -3)
         label.Font = (candy or ambitious or vx7) and Enum.Font.GothamBlack or Enum.Font.GothamBold
         label.TextSize = (candy or vx7) and 11 or 10
         label.TextColor3 = candy and Theme.Accent or (bubble or ambitious or vx7) and Theme.Text or Theme.SubText
+        if sectionIcon then
+            sectionIcon.Holder.AnchorPoint = vx7 and Vector2.new(0, 0.5) or Vector2.new(0, 1)
+            sectionIcon.Holder.Position = vx7 and UDim2.new(0, lx, 0.5, 0) or UDim2.new(0, lx, 1, -4)
+            sectionIcon.Set(label.TextColor3, false)
+        end
     end)
 end
 
@@ -2808,7 +3231,7 @@ function Tab:Toggle(o)
     hit.MouseButton1Click:Connect(function()
         element:Set(not element.Value)
         play(element.Value and "On" or "Off")
-        if element.Value then shockwave() end
+        if element.Value and not Settings.ReduceMotion then shockwave() end
         mascotReact(element.Value)
     end)
 
@@ -3848,6 +4271,7 @@ local function encodeConfig()
         pad = fromUDim(MobilePad.Position),
         mini = fromUDim(Mini.Position),
     }
+    data._recent = Library.Recent or {}
     data._version = CONFIG_VERSION
     return HttpService:JSONEncode(data)
 end
@@ -3897,6 +4321,13 @@ function Library:LoadConfig(silent)
     apply("Theme Preset", data["Theme Preset"])
     for flag, value in pairs(data) do
         if flag ~= "Theme Preset" then apply(flag, value) end
+    end
+
+    if type(data._recent) == "table" then
+        Library.Recent = {}
+        for _, query in ipairs(data._recent) do
+            if type(query) == "string" and #Library.Recent < 5 then table.insert(Library.Recent, query) end
+        end
     end
 
     local ui = data._ui
@@ -4127,6 +4558,22 @@ Config:Toggle({
     List = false,
     Callback = function(state)
         Settings.LockScreen = state
+    end,
+})
+Config:Toggle({
+    Name = "Reduce Motion",
+    List = false,
+    Callback = function(state)
+        Settings.ReduceMotion = state
+        applyBackdrop(Settings.Backdrop)
+    end,
+})
+Config:Toggle({
+    Name = "Window Snapping",
+    Default = true,
+    List = false,
+    Callback = function(state)
+        Settings.Snap = state
     end,
 })
 Config:Keybind({
@@ -4701,8 +5148,8 @@ end
 
 local function runIntro()
     -- with the intro turned off, go straight to the lock screen (if that's still on)
-    if not Settings.Intro then
-        if Settings.LockScreen then
+    if not Settings.Intro or Settings.ReduceMotion then
+        if Settings.LockScreen and not Settings.ReduceMotion then
             runLockScreen()
         end
         return
