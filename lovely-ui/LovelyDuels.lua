@@ -87,6 +87,7 @@ local Settings = {
     LockScreen = true,  -- swipe-to-unlock screen after the intro
     Rainbow    = false,
     ReduceMotion = false, -- turns off particles, border spin and the big animations
+    Aurora     = true,    -- slow drifting glows behind the rows
     Snap       = true,    -- window snaps to screen edges and the centre line after a drag
     Font       = "Default", -- any Enum.Font name; Default keeps each style's own fonts
     UIScale    = 1,
@@ -292,7 +293,13 @@ end
 
 local function accent(obj, prop, key)
     onTheme(function()
-        obj[prop] = Theme[key or "Accent"]
+        local color = Theme[key or "Accent"]
+        -- while a theme change is fading, colours blend over a third of a second instead of snapping
+        if Library.Fade and obj.Parent then
+            tween(obj, 0.35, { [prop] = color })
+        else
+            obj[prop] = color
+        end
     end)
     return obj
 end
@@ -703,6 +710,54 @@ accent(new("Frame", {
         }),
     }),
 }), "BackgroundColor3")
+
+-- living background: three big soft glows drift slowly behind the rows, like an aurora
+do
+    local layer = new("Frame", {
+        Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 1,
+        Parent = Main,
+    })
+    Library.AuroraLayer = layer
+    local blobs = {}
+    for i, spec in ipairs({ { "Accent", 330, 0 }, { "Secondary", 300, 2.1 }, { "Accent", 260, 4.2 } }) do
+        local blob = new("Frame", {
+            Size = UDim2.fromOffset(spec[2], spec[2]),
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            BackgroundTransparency = 1,
+            Parent = layer,
+        })
+        -- stacked faint circles read as one soft radial glow
+        local rings = {}
+        for r = 1, 8 do
+            local sc = 1 - (r - 1) * 0.11
+            rings[r] = new("Frame", {
+                Size = UDim2.fromScale(sc, sc),
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                Position = UDim2.fromScale(0.5, 0.5),
+                BackgroundTransparency = 0.965,
+                BorderSizePixel = 0,
+                Parent = blob,
+            }, { new("UICorner", { CornerRadius = UDim.new(1, 0) }) })
+        end
+        blobs[i] = { Frame = blob, Rings = rings, Key = spec[1], Phase = spec[3] }
+    end
+    onTheme(function()
+        for _, b in ipairs(blobs) do
+            for _, ring in ipairs(b.Rings) do
+                ring.BackgroundColor3 = Theme[b.Key]
+            end
+        end
+    end)
+    layer.Visible = Settings.Aurora
+    connect(RunService.RenderStepped, function()
+        if not Holder.Visible or not layer.Visible then return end
+        local t = Settings.ReduceMotion and 0 or os.clock()
+        for _, b in ipairs(blobs) do
+            b.Frame.Position = UDim2.fromScale(0.5 + 0.42 * math.sin(t * 0.11 + b.Phase), 0.5 + 0.42 * math.cos(t * 0.083 + b.Phase * 1.3))
+        end
+    end)
+end
 
 -- floating particles sit behind everything else in the window
 local SnowLayer = new("Frame", {
@@ -1234,11 +1289,11 @@ local Card = new("Frame", {
 }, { corner(10), stroke(Theme.Stroke, 1) })
 
 local Avatar = new("ImageLabel", {
-    Size = UDim2.fromOffset(28, 28),
-    Position = UDim2.fromOffset(6, 6),
+    Size = UDim2.fromOffset(34, 34),
+    Position = UDim2.fromOffset(5, 3),
     BackgroundColor3 = Theme.Row,
     Parent = Card,
-}, { corner(14) })
+}, { corner(17) })
 accent(stroke(Theme.Accent, 1, 0.5), "Color").Parent = Avatar
 
 local OnlineDot = accent(new("Frame", {
@@ -1250,7 +1305,7 @@ local OnlineDot = accent(new("Frame", {
 
 new("TextLabel", {
     Size = UDim2.new(1, -120, 0, 14),
-    Position = UDim2.fromOffset(42, 7),
+    Position = UDim2.fromOffset(47, 7),
     BackgroundTransparency = 1,
     Text = LocalPlayer.DisplayName,
     Font = Enum.Font.GothamBold,
@@ -1263,7 +1318,7 @@ new("TextLabel", {
 
 new("TextLabel", {
     Size = UDim2.new(1, -120, 0, 12),
-    Position = UDim2.fromOffset(42, 21),
+    Position = UDim2.fromOffset(47, 21),
     BackgroundTransparency = 1,
     Text = "@" .. LocalPlayer.Name,
     Font = Enum.Font.Gotham,
@@ -1307,6 +1362,74 @@ task.spawn(function()
         Avatar.Image = image
         CandyAvatar.Image = image
     end
+end)
+
+-- a small 3D copy of your character, slowly turning, covers the flat headshot once it has loaded
+task.spawn(function()
+    local viewport = new("ViewportFrame", {
+        Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 1,
+        Ambient = Color3.fromRGB(190, 180, 205),
+        LightColor = Color3.fromRGB(255, 245, 250),
+        LightDirection = Vector3.new(-0.6, -0.8, 1),
+        Visible = false,
+        ZIndex = 2,
+        Parent = Avatar,
+    }, { corner(17) })
+    local camera = new("Camera", { FieldOfView = 26, Parent = viewport })
+    viewport.CurrentCamera = camera
+    local model
+
+    local function build()
+        local character = LocalPlayer.Character
+        local head = character and character:FindFirstChild("Head")
+        if not (head and character:FindFirstChild("HumanoidRootPart")) then return end
+
+        local ok, clone = pcall(function()
+            character.Archivable = true
+            return character:Clone()
+        end)
+        if not ok or not clone then return end
+
+        -- a still copy only needs the look, not the scripts, sounds and effects
+        for _, d in ipairs(clone:GetDescendants()) do
+            if d:IsA("BaseScript") or d:IsA("Sound") or d:IsA("ParticleEmitter") or d:IsA("Trail") or d:IsA("Beam") then
+                d:Destroy()
+            end
+        end
+
+        if model then model:Destroy() end
+        clone:PivotTo(CFrame.new(0, 0, 0))
+        clone.Parent = viewport
+        model = clone
+
+        -- the camera frames head and shoulders from the front (characters face -Z)
+        local cloneHead = clone:FindFirstChild("Head")
+        local target = (cloneHead and cloneHead.Position or Vector3.new(0, 1.5, 0)) - Vector3.new(0, 0.3, 0)
+        camera.CFrame = CFrame.lookAt(target + Vector3.new(0, 0.1, -4.6), target)
+        viewport.Visible = true
+        Avatar.ImageTransparency = 1
+    end
+
+    local function whenReady()
+        local waited = 0
+        while (not LocalPlayer.Character or not LocalPlayer:HasAppearanceLoaded()) and waited < 15 do
+            task.wait(0.25)
+            waited += 0.25
+        end
+        build()
+    end
+
+    whenReady()
+    connect(LocalPlayer.CharacterAdded, function()
+        task.spawn(whenReady)
+    end)
+
+    connect(RunService.RenderStepped, function()
+        if not model or not Holder.Visible or not Card.Visible then return end
+        local angle = Settings.ReduceMotion and 0.4 or os.clock() * 0.7
+        model:PivotTo(CFrame.new(0, 0, 0) * CFrame.Angles(0, angle, 0))
+    end)
 end)
 
 -- tab bar: a sliding highlight sits underneath the row of buttons
@@ -2325,7 +2448,7 @@ connect(RunService.RenderStepped, function(dt)
     -- rainbow rebuilds every themed element, so it runs a few times a second rather than every few frames
     if Settings.Rainbow and now - lastRainbow > 0.3 then
         lastRainbow = now
-        Library:SetAccent(Color3.fromHSV((now * 0.08) % 1, 0.62, 0.92))
+        Library:SetAccent(Color3.fromHSV((now * 0.08) % 1, 0.62, 0.92), true)
     end
 
     frames += 1
@@ -2359,6 +2482,18 @@ function Library:Notify() end
 
 local Tab = {}
 Tab.__index = Tab
+
+do
+    -- one loop turns the gradient on every row border that's currently glowing
+    Library.Spin = Library.Spin or {}
+    connect(RunService.RenderStepped, function()
+        if not Holder.Visible then return end
+        local angle = Settings.ReduceMotion and 45 or (os.clock() * 140) % 360
+        for gradient in pairs(Library.Spin) do
+            gradient.Rotation = angle
+        end
+    end)
+end
 
 local function makePage()
     local page = new("ScrollingFrame", {
@@ -2909,6 +3044,8 @@ function Tab:_row(height, name)
     height = height or 38
     local holder, frame = self:_holder(height)
     frame.BackgroundColor3 = Theme.Row
+    -- keeps ripples and glows inside the row
+    frame.ClipsDescendants = true
 
     local rowCorner = corner(10)
     rowCorner.Parent = frame
@@ -2944,11 +3081,37 @@ function Tab:_row(height, name)
         Parent = frame,
     }, { corner(1) }), "BackgroundColor3")
 
+    -- a bright arc travels around the row's edge while it's hovered (and stays on for toggles that are on)
+    local glowStroke = stroke(Color3.new(1, 1, 1), 1.5, 1)
+    glowStroke.Parent = frame
+    local glowGradient = new("UIGradient", {
+        Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 1),
+            NumberSequenceKeypoint.new(0.3, 1),
+            NumberSequenceKeypoint.new(0.42, 0.1),
+            NumberSequenceKeypoint.new(0.58, 0.1),
+            NumberSequenceKeypoint.new(0.72, 1),
+            NumberSequenceKeypoint.new(1, 1),
+        }),
+        Parent = glowStroke,
+    })
+    onTheme(function()
+        glowGradient.Color = ColorSequence.new(Theme.Accent, Theme.Secondary)
+    end)
+    local glowState = { Hover = false, On = false }
+    local glowCtl = {}
+    function glowCtl.Set(key, value)
+        glowState[key] = value
+        local active = glowState.Hover or glowState.On
+        tween(glowStroke, 0.25, { Transparency = active and 0.05 or 1 })
+        Library.Spin[glowGradient] = active or nil
+    end
+
     -- Bubble rows are white-outlined pills; Ambitious rows are dark glass over the backdrop
     onTheme(function()
         -- VX7 rows are glassy with a faint accent edge
         local candy, bubble, ambitious, vx7 = isCandy(), isBubble(), isAmbitious(), isVX7()
-        frame.BackgroundTransparency = candy and 0.3 or bubble and 0.35 or ambitious and 0.15 or vx7 and 0.25 or 0
+        frame.BackgroundTransparency = candy and 0.3 or bubble and 0.35 or ambitious and 0.15 or vx7 and 0.25 or 0.1
         rowCorner.CornerRadius = UDim.new(0, bubble and math.floor(height / 2) or 10)
         rowStroke.Color = bubble and Color3.new(1, 1, 1) or vx7 and Theme.Accent or Theme.Stroke
         rowStroke.Transparency = (candy or ambitious) and 0.05 or bubble and 0.4 or vx7 and 0.7 or 0.35
@@ -2967,11 +3130,39 @@ function Tab:_row(height, name)
     hit.MouseEnter:Connect(function()
         tween(frame, 0.15, { BackgroundColor3 = Theme.RowHover })
         tween(hoverBar, 0.2, { Size = UDim2.fromOffset(2, math.floor(height * 0.5)) })
+        glowCtl.Set("Hover", true)
         hoverSound()
     end)
     hit.MouseLeave:Connect(function()
         tween(frame, 0.25, { BackgroundColor3 = Theme.Row })
         tween(hoverBar, 0.25, { Size = UDim2.fromOffset(2, 0) })
+        glowCtl.Set("Hover", false)
+    end)
+
+    -- clicking sends a soft ripple outward from exactly where the pointer landed
+    hit.InputBegan:Connect(function(input)
+        if not isPointer(input) or Settings.ReduceMotion then return end
+        local scale = math.max(HolderScale.Scale, 0.01)
+        local center
+        if input.UserInputType == Enum.UserInputType.Touch then
+            center = Vector2.new(input.Position.X, frame.AbsolutePosition.Y + frame.AbsoluteSize.Y / 2)
+        else
+            center = UserInputService:GetMouseLocation()
+        end
+        local at = (center - frame.AbsolutePosition) / scale
+        local reach = math.max(frame.AbsoluteSize.X, 120) / scale * 1.7
+        local dot = new("Frame", {
+            Size = UDim2.fromOffset(0, 0),
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.fromOffset(at.X, at.Y),
+            BackgroundColor3 = Theme.Accent,
+            BackgroundTransparency = 0.7,
+            BorderSizePixel = 0,
+            ZIndex = 0,
+            Parent = frame,
+        }, { new("UICorner", { CornerRadius = UDim.new(1, 0) }) })
+        tween(dot, 0.6, { Size = UDim2.fromOffset(reach, reach), BackgroundTransparency = 1 }, Enum.EasingStyle.Quart)
+        Debris:AddItem(dot, 0.65)
     end)
 
     -- pressing a row nudges it in a hair (about 2%), then it springs back.
@@ -3005,7 +3196,7 @@ function Tab:_row(height, name)
         })
     end
 
-    return frame, hit
+    return frame, hit, glowCtl
 end
 
 function Tab:_label(parent, text, height)
@@ -3174,7 +3365,7 @@ end
 function Tab:Toggle(o)
     local flag = o.Flag or o.Name
     local callback = o.Callback or function() end
-    local frame, hit = self:_row(38, o.Name)
+    local frame, hit, glowCtl = self:_row(38, o.Name)
     self:_label(frame, o.Name)
     local rowStroke = frame:FindFirstChildOfClass("UIStroke")
     -- keeps the shockwave ring inside the row
@@ -3257,6 +3448,7 @@ function Tab:Toggle(o)
         trackFill.Enabled = on
         wash.BackgroundColor3 = Theme.Accent
         tween(wash, 0.35, { BackgroundTransparency = on and 0.86 or 1 })
+        glowCtl.Set("On", on)
 
         -- Bubble swaps the switch for a single dot that lights up
         local bubble = isBubble()
@@ -3430,6 +3622,26 @@ function Tab:Slider(o)
         fillGradient.Color = ColorSequence.new(Theme.Accent, Theme.Secondary)
     end)
 
+    -- while dragging, the fill leaves a short glowing trail behind the knob
+    local trail = new("Frame", {
+        Size = UDim2.fromOffset(0, 10),
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.fromScale(0, 0.5),
+        BackgroundColor3 = Color3.new(1, 1, 1),
+        BorderSizePixel = 0,
+        Visible = false,
+        Parent = bar,
+    }, { corner(5) })
+    local trailGradient = new("UIGradient", { Parent = trail })
+    onTheme(function()
+        trailGradient.Color = ColorSequence.new(Theme.AccentGlow, Theme.Accent)
+        trailGradient.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 1),
+            NumberSequenceKeypoint.new(1, 0.2),
+        })
+    end)
+    local trailLen, trailDir, lastAlpha = 0, 1, nil
+
     local knob = new("Frame", {
         Size = UDim2.fromOffset(14, 14),
         AnchorPoint = Vector2.new(0.5, 0.5),
@@ -3523,6 +3735,15 @@ function Tab:Slider(o)
     local sliding = false
     local function fromInput(input)
         local alpha = math.clamp((input.Position.X - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
+        -- the faster the knob moves, the longer the trail
+        if lastAlpha and not Settings.ReduceMotion then
+            local dx = (alpha - lastAlpha) * bar.AbsoluteSize.X / math.max(HolderScale.Scale, 0.01)
+            if dx ~= 0 then
+                trailDir = dx > 0 and 1 or -1
+                trailLen = math.min(70, trailLen + math.abs(dx) * 2.5)
+            end
+        end
+        lastAlpha = alpha
         element:Set(min + (max - min) * alpha)
     end
 
@@ -3543,6 +3764,22 @@ function Tab:Slider(o)
             showBubble(false)
             play("Click")
         end
+    end)
+
+    -- the trail shrinks away on its own once the knob stops
+    connect(RunService.RenderStepped, function(dt)
+        if trailLen <= 0.5 then
+            trailLen = 0
+            if trail.Visible then trail.Visible = false end
+            return
+        end
+        trailLen *= math.exp(-dt * 7)
+        local alphaNow = (max - min) == 0 and 0 or ((element.Value or min) - min) / (max - min)
+        trail.Visible = true
+        trail.AnchorPoint = Vector2.new(trailDir > 0 and 1 or 0, 0.5)
+        trail.Position = UDim2.fromScale(alphaNow, 0.5)
+        trail.Size = UDim2.fromOffset(trailLen, 10)
+        trailGradient.Rotation = trailDir > 0 and 0 or 180
     end)
 
     element:Set(o.Default or min, true)
@@ -4290,12 +4527,14 @@ local function refreshAll()
     if effectiveFont() then syncFonts() end
 end
 
-function Library:SetAccent(color)
+function Library:SetAccent(color, smooth)
     local h, s, v = color:ToHSV()
     Theme.Accent = color
     Theme.AccentDark = Color3.fromHSV(h, s, v * 0.35)
     Theme.AccentGlow = Color3.fromHSV(h, s * 0.3, 1)
+    self.Fade = (smooth and not Settings.ReduceMotion) or false
     refreshAll()
+    self.Fade = false
 end
 
 function Library:SetStyle(name)
@@ -4578,6 +4817,15 @@ Visual:Toggle({
 Visual:Section("Performance")
 Visual:Graph({ Name = "Live Stats" })
 Visual:Section("Backdrop")
+Visual:Toggle({
+    Name = "Living Background",
+    Default = true,
+    List = false,
+    Callback = function(state)
+        Settings.Aurora = state
+        if Library.AuroraLayer then Library.AuroraLayer.Visible = state end
+    end,
+})
 Visual:Dropdown({
     Name = "Backdrop FX",
     Options = { "Particles", "Hearts", "Leaves", "Matrix", "Off" },
@@ -4711,11 +4959,29 @@ function Library:ApplyPreset(name)
     local preset = THEME_PRESETS[name]
     if not preset then return end
 
+    -- a preset change fades over about half a second; a second change in that window waits its turn
+    if self.PresetBusy then
+        self.PresetQueued = name
+        return
+    end
+    self.PresetBusy = true
+    task.delay(0.55, function()
+        self.PresetBusy = false
+        local queued = self.PresetQueued
+        self.PresetQueued = nil
+        if queued then self:ApplyPreset(queued) end
+    end)
+    local smooth = not Settings.ReduceMotion
+
     local function remap(obj, prop)
         local color = obj[prop]
         for _, key in ipairs(BASE_KEYS) do
             if sameColor(color, Theme[key]) then
-                obj[prop] = preset[key]
+                if smooth then
+                    tween(obj, 0.45, { [prop] = preset[key] })
+                else
+                    obj[prop] = preset[key]
+                end
                 return
             end
         end
@@ -4737,7 +5003,7 @@ function Library:ApplyPreset(name)
         Theme[key] = preset[key]
     end
     AccentPicker:Set(preset.Accent, true)
-    if Settings.Rainbow then refreshAll() else self:SetAccent(preset.Accent) end
+    if Settings.Rainbow then refreshAll() else self:SetAccent(preset.Accent, true) end
     play("Swap")
 end
 
