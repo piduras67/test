@@ -485,73 +485,65 @@ class Soldier {
     this.state = "ragdoll"; this.t = 0;
     this.mixer.stopAllAction();
     this.root.updateMatrixWorld(true);
-    const right = V().set(1, 0, 0).applyQuaternion(this.root.quaternion);
+    // every physics part sits exactly on its bone: same origin, same rotation.
+    // the shape is offset along the bone toward its child, so the bone just copies the part's rotation.
     for (const s of SEGS) {
-      const a = this.boneWorld(s.a);
-      let b = this.bones[s.b] ? this.boneWorld(s.b) : null;
-      if (!b) { const neck = this.boneWorld("Neck"); b = a.clone().add(a.clone().sub(neck).normalize().multiplyScalar(0.22)); }
-      const d = b.clone().sub(a); let len = d.length(); d.normalize();
-      if (s.ext) { b.addScaledVector(d, s.ext); len += s.ext; }
-      const x = right.clone().addScaledVector(d, -right.dot(d)); if (x.lengthSq() < 1e-4) x.set(0, 0, 1); x.normalize();
-      const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, d, V().crossVectors(x, d)));
-      const c = a.clone().add(b).multiplyScalar(0.5);
+      const bone = this.bones[s.a];
+      const pa = bone.getWorldPosition(V()), qa = bone.getWorldQuaternion(new THREE.Quaternion());
+      let pb = this.bones[s.b] ? this.bones[s.b].getWorldPosition(V()) : null;
+      if (!pb) { const neck = this.boneWorld("Neck"); pb = pa.clone().add(pa.clone().sub(neck).normalize().multiplyScalar(0.22)); }
+      let len = pa.distanceTo(pb);
+      const axis = pb.clone().sub(pa).normalize().applyQuaternion(qa.clone().invert()); // toward the child, in the bone's frame
+      if (s.ext) len += s.ext;
       const arm = /Arm/.test(s.n);
-      const body = new CANNON.Body({ mass: s.m, material: fleshMat, linearDamping: arm ? 0.35 : 0.12, angularDamping: arm ? 0.92 : 0.7, collisionFilterGroup: 2, collisionFilterMask: 1, allowSleep: true });
+      const body = new CANNON.Body({ mass: s.m, material: fleshMat, linearDamping: arm ? 0.3 : 0.12, angularDamping: arm ? 0.85 : 0.7, collisionFilterGroup: 2, collisionFilterMask: 1, allowSleep: true });
       body.sleepSpeedLimit = 0.25; body.sleepTimeLimit = 0.6;
-      body.addShape(s.r ? new CANNON.Sphere(s.r) : new CANNON.Box(new CANNON.Vec3(s.w[0], Math.max(len / 2, 0.05), s.w[1])));
-      body.position.set(c.x, c.y + 0.01, c.z); body.quaternion.set(q.x, q.y, q.z, q.w);
+      const shapeQ = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis);
+      const shape = s.r ? new CANNON.Sphere(s.r) : new CANNON.Box(new CANNON.Vec3(s.w[0], Math.max(len / 2, 0.04), s.w[1]));
+      const off = axis.clone().multiplyScalar(len / 2);
+      body.addShape(shape, new CANNON.Vec3(off.x, off.y, off.z), new CANNON.Quaternion(shapeQ.x, shapeQ.y, shapeQ.z, shapeQ.w));
+      body.position.set(pa.x, pa.y, pa.z);
+      body.quaternion.set(qa.x, qa.y, qa.z, qa.w);
       body.addEventListener("collide", e => this.onContact(body, e));
       world.addBody(body);
       const group = new THREE.Group(); scene.add(group);
-      group.position.copy(body.position); group.quaternion.copy(q);
-      this.parts[s.n] = { def: s, body, group, start: a, dir: d, half: len / 2 };
+      group.position.copy(pa); group.quaternion.copy(qa);
+      this.parts[s.n] = { def: s, body, group, axis, len, half: len / 2 };
     }
-    const loc = (body, v) => body.quaternion.inverse().vmult(new CANNON.Vec3(v.x, v.y, v.z));
+    // nothing may start inside the floor
+    let lowest = Infinity;
+    for (const k in this.parts) {
+      const { body, axis, len, def } = this.parts[k];
+      const a = toV(body.position), b = a.clone().add(axis.clone().applyQuaternion(toQ(body.quaternion)).multiplyScalar(len));
+      lowest = Math.min(lowest, a.y, b.y - (def.r || def.w[0]));
+    }
+    if (lowest < 0.03) for (const k in this.parts) this.parts[k].body.position.y += 0.03 - lowest;
+    // joints at each child bone's origin, the cone around the child's own direction
     for (const s of SEGS) {
       if (!s.p) continue;
-      const A = this.parts[s.p].body, Bd = this.parts[s.n].body, pv = this.parts[s.n].start, d = this.parts[s.n].dir;
-      const c = new CANNON.ConeTwistConstraint(A, Bd, { pivotA: loc(A, pv.clone().sub(A.position)), pivotB: loc(Bd, pv.clone().sub(Bd.position)), axisA: loc(A, d), axisB: loc(Bd, d), angle: s.ang, twistAngle: s.tw, collideConnected: false, maxForce: 1e7 });
+      const A = this.parts[s.p].body, B = this.parts[s.n];
+      const pivotWorld = B.body.position;
+      const pivotA = A.quaternion.inverse().vmult(pivotWorld.vsub(A.position));
+      const dirWorld = B.body.quaternion.vmult(new CANNON.Vec3(B.axis.x, B.axis.y, B.axis.z));
+      const c = new CANNON.ConeTwistConstraint(A, B.body, {
+        pivotA, pivotB: new CANNON.Vec3(0, 0, 0),
+        axisA: A.quaternion.inverse().vmult(dirWorld), axisB: new CANNON.Vec3(B.axis.x, B.axis.y, B.axis.z),
+        angle: s.ang, twistAngle: s.tw, collideConnected: false, maxForce: 1e7,
+      });
       world.addConstraint(c); this.joints[s.n] = c;
     }
-    // each bone keeps its rotation relative to the body that carries it; only the hips take a position.
-    // the skeleton's own bone lengths are kept, so the mesh can never stretch or tear.
-    this.drive = this.boneList.map(bone => {
-      let b = bone;
-      while (b && !(b.isBone && SEG_BY_BONE[b.name])) b = b.parent;
-      const owner = b ? SEG_BY_BONE[b.name] : "pelvis";
-      const bq = toQ(this.parts[owner].body.quaternion).invert().multiply(bone.getWorldQuaternion(new THREE.Quaternion()));
-      // limbs are aimed, never rolled: twisting a skinned arm crushes the mesh
-      const seg = SEGS.find(sg => "mixamorig" + sg.a === bone.name);
-      const limb = !!seg && /Arm|Leg/.test(seg.n);
-      const child = limb && this.bones[seg.b];
-      return { bone, owner, off: bq, rest: bone.quaternion.clone(), limb, dirLocal: child ? child.position.clone().normalize() : null, inLimb: /Arm|Leg/.test(owner) };
-    });
-    const pel = this.parts.pelvis.body;
-    this.hipOffset = toQ(pel.quaternion).invert().clone();
-    this.hipLocal = this.bones.Hips.getWorldPosition(V()).sub(toV(pel.position)).applyQuaternion(toQ(pel.quaternion).invert());
-    // he fights to stay on his feet for a few seconds, holding the wound
+    // the bones each part drives, in parent-first order
+    this.driven = this.boneList.filter(b => SEG_BY_BONE[b.name]).map(b => ({ bone: b, part: this.parts[SEG_BY_BONE[b.name]] }));
     if (fightBack) {
       this.startPuppet(point, dir);
       const local = point.clone().applyMatrix4(this.root.matrixWorld.clone().invert());
       this.hand = local.x > 0 ? "L" : "R";
-      this.gripTarget = point.clone();
       Sound.breath(point);
     }
   }
 
-  // ---------------------------------------------------------- active-ragdoll balance
   // ---------------------------------------------------------- animated ragdoll: a hidden puppet plays the hurt motion,
-  // and the physics bodies are steered toward its pose with a strength that fades until he's fully limp
-  segTransform(bones, s, right) {
-    const a = bones[s.a].getWorldPosition(V());
-    let b = bones[s.b] ? bones[s.b].getWorldPosition(V()) : null;
-    if (!b) { const neck = bones.Neck.getWorldPosition(V()); b = a.clone().add(a.clone().sub(neck).normalize().multiplyScalar(0.22)); }
-    const d = b.clone().sub(a); let len = d.length(); d.normalize();
-    if (s.ext) { b.addScaledVector(d, s.ext); len += s.ext; }
-    const x = right.clone().addScaledVector(d, -right.dot(d)); if (x.lengthSq() < 1e-4) x.set(0, 0, 1); x.normalize();
-    const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, d, V().crossVectors(x, d)));
-    return { a, b, c: a.clone().add(b).multiplyScalar(0.5), d, len, q };
-  }
+  // and each physics part is steered toward its bone on the puppet, with a strength that fades until he's limp
   startPuppet(point, dir) {
     this.puppet = cloneSkinned(MODEL.scene);
     this.puppet.scale.setScalar(MODEL_SCALE);
@@ -595,9 +587,9 @@ class Soldier {
       const target = this.wounds[0].obj.getWorldPosition(V());
       const fwd = V().set(0, 0, 1).applyQuaternion(this.puppet.quaternion);
       // the wound rides the ragdoll; aim at the same spot on the puppet's chest
-      const off = target.sub(toV(this.parts.chest.body.position));
-      const chestT = this.segTransform(P, SEGS[1], V().set(1, 0, 0).applyQuaternion(this.puppet.quaternion));
-      const goal = chestT.c.clone().add(off.applyQuaternion(toQ(this.parts.chest.body.quaternion).invert()).applyQuaternion(chestT.q)).addScaledVector(fwd, 0.03);
+      const cb = this.parts.chest.body;
+      const off = target.sub(toV(cb.position)).applyQuaternion(toQ(cb.quaternion).invert());
+      const goal = P.Spine.getWorldPosition(V()).add(off.applyQuaternion(P.Spine.getWorldQuaternion(new THREE.Quaternion()))).addScaledVector(fwd, 0.03);
       const sh = P[H + "Arm"].getWorldPosition(V());
       const pole = sh.clone().add(new THREE.Vector3(0, -0.6, 0)).addScaledVector(V().set(H === "Left" ? 1 : -1, 0, 0).applyQuaternion(this.puppet.quaternion), 0.5).addScaledVector(fwd, -0.2);
       armIK(P[H + "Arm"], P[H + "ForeArm"], P[H + "Hand"], goal, pole, THREE.MathUtils.smoothstep(B.t, 0.1, 0.5));
@@ -606,11 +598,10 @@ class Soldier {
     // strength: a moment of free reaction to the bullet, then he catches himself, then slowly loses it
     const catchUp = THREE.MathUtils.smoothstep(B.t, 0.08, 0.45);
     const strength = catchUp * Math.pow(1 - k, 1.2);
-    const right = V().set(1, 0, 0).applyQuaternion(this.puppet.quaternion);
     const blend = Math.min(1, strength * dt * 22);
     for (const sdef of SEGS) {
       const body = this.parts[sdef.n].body;
-      const T = this.segTransform(P, sdef, right);
+      const T = { c: P[sdef.a].getWorldPosition(V()), q: P[sdef.a].getWorldQuaternion(new THREE.Quaternion()) };
       const vT = T.c.sub(toV(body.position)).multiplyScalar(10);
       body.velocity.x += (vT.x - body.velocity.x) * blend;
       body.velocity.y += (vT.y - body.velocity.y) * blend;
@@ -631,8 +622,7 @@ class Soldier {
     if (!this.hand || !this.balance || !this.wounds.length) return;
     const fore = this.parts[this.hand === "L" ? "lArmL" : "lArmR"];
     const w = this.wounds[0].obj.getWorldPosition(V());
-    const ax = fore.body.quaternion.vmult(new CANNON.Vec3(0, 1, 0));
-    const tip = toV(fore.body.position).add(toV(ax).multiplyScalar(fore.half * 0.8));
+    const tip = toV(fore.body.position).add(fore.axis.clone().applyQuaternion(toQ(fore.body.quaternion)).multiplyScalar(fore.len * 0.9));
     const pull = w.sub(tip);
     const strength = 0.6 * (1 - this.balance.t / this.balance.dur);
     const f = pull.multiplyScalar(260 * strength).sub(toV(fore.body.velocity).multiplyScalar(14 * strength));
@@ -644,10 +634,10 @@ class Soldier {
   nearestPart(point) {
     let best = "chest", bd = Infinity;
     for (const k in this.parts) {
-      const { body, half, def } = this.parts[k];
-      const ax = V().set(0, 1, 0).applyQuaternion(toQ(body.quaternion)), rel = point.clone().sub(toV(body.position));
-      const t = THREE.MathUtils.clamp(rel.dot(ax), -half, half);
-      const d = rel.addScaledVector(ax, -t).length() - (def.r || def.w[0]);
+      const { body, axis, len, def } = this.parts[k];
+      const a = toV(body.position), ax = axis.clone().applyQuaternion(toQ(body.quaternion));
+      const t = THREE.MathUtils.clamp(point.clone().sub(a).dot(ax), 0, len);
+      const d = a.addScaledVector(ax, t).distanceTo(point) - (def.r || def.w[0]);
       if (d < bd) { bd = d; best = k; }
     }
     return best;
@@ -673,33 +663,22 @@ class Soldier {
   // before the scene matrices update: set bone rotations (and the hips' position) from the bodies
   pose() {
     if (this.state !== "ragdoll") return;
-    const worldQ = new Map();
-    const parentQ = new THREE.Quaternion();
-    for (const d of this.drive) {
-      const parent = d.bone.parent;
-      if (worldQ.has(parent)) parentQ.copy(worldQ.get(parent)); else parent.getWorldQuaternion(parentQ);
-      let want;
-      if (d.limb) {
-        // start from the pose it had when hit, then swing (no roll) so it points along its body
-        const base = parentQ.clone().multiply(d.bone.quaternion);
-        const cur = d.dirLocal.clone().applyQuaternion(base);
-        const b = this.parts[d.owner].body;
-        const axis = V().set(0, 1, 0).applyQuaternion(toQ(b.quaternion));
-        want = new THREE.Quaternion().setFromUnitVectors(cur.normalize(), axis).multiply(base);
-      } else if (d.inLimb) {
-        want = parentQ.clone().multiply(d.rest); // hands, fingers, feet just follow
-      } else {
-        want = toQ(this.parts[d.owner].body.quaternion).multiply(d.off);
-      }
-      d.bone.quaternion.copy(parentQ.clone().invert().multiply(want));
-      worldQ.set(d.bone, want);
+    const worldQ = new Map(), pq = new THREE.Quaternion();
+    for (const { bone, part } of this.driven) {
+      let parentQ;
+      // nearest ancestor we already placed this frame, walking up through any un-driven bones in between
+      const chain = [];
+      let p = bone.parent;
+      while (p && !worldQ.has(p) && p.isBone) { chain.push(p); p = p.parent; }
+      if (p && worldQ.has(p)) { parentQ = worldQ.get(p).clone(); for (let i = chain.length - 1; i >= 0; i--) parentQ.multiply(chain[i].quaternion); }
+      else parentQ = bone.parent.getWorldQuaternion(pq).clone();
+      const want = toQ(part.body.quaternion);
+      bone.quaternion.copy(parentQ.invert().multiply(want));
+      worldQ.set(bone, want);
     }
-    // hips position follows the pelvis body
-    const pel = this.parts.pelvis.body;
-    const hipsWorld = toV(pel.position).add(this.hipLocal.clone().applyQuaternion(toQ(pel.quaternion)));
-    const hips = this.bones.Hips;
+    const hips = this.bones.Hips, pel = this.parts.pelvis.body;
     hips.parent.updateMatrixWorld(true);
-    hips.position.copy(hips.parent.worldToLocal(hipsWorld));
+    hips.position.copy(hips.parent.worldToLocal(toV(pel.position)));
   }
   bleedTick(dt) {
     for (const b of this.bleed) {
