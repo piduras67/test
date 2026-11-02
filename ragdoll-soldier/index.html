@@ -388,13 +388,13 @@ const SEGS = [
   { n: "pelvis", a: "Hips", b: "Spine", w: [0.15, 0.1], m: 10 },
   { n: "chest", a: "Spine", b: "Neck", w: [0.17, 0.11], m: 16, p: "pelvis", ang: 0.45, tw: 0.3 },
   { n: "head", a: "Head", b: "HeadTop_End", r: 0.11, m: 5, p: "chest", ang: 0.55, tw: 0.5 },
-  { n: "uArmL", a: "LeftArm", b: "LeftForeArm", w: [0.05, 0.05], m: 2.5, p: "chest", ang: 1.3, tw: 0.6 },
+  { n: "uArmL", a: "LeftArm", b: "LeftForeArm", w: [0.05, 0.05], m: 2.5, p: "chest", ang: 1.3, tw: 0.25 },
   { n: "lArmL", a: "LeftForeArm", b: "LeftHand", ext: 0.1, w: [0.045, 0.045], m: 1.8, p: "uArmL", ang: 1.0, tw: 0.2 },
-  { n: "uArmR", a: "RightArm", b: "RightForeArm", w: [0.05, 0.05], m: 2.5, p: "chest", ang: 1.3, tw: 0.6 },
+  { n: "uArmR", a: "RightArm", b: "RightForeArm", w: [0.05, 0.05], m: 2.5, p: "chest", ang: 1.3, tw: 0.25 },
   { n: "lArmR", a: "RightForeArm", b: "RightHand", ext: 0.1, w: [0.045, 0.045], m: 1.8, p: "uArmR", ang: 1.0, tw: 0.2 },
-  { n: "uLegL", a: "LeftUpLeg", b: "LeftLeg", w: [0.075, 0.075], m: 7.5, p: "pelvis", ang: 0.85, tw: 0.25 },
+  { n: "uLegL", a: "LeftUpLeg", b: "LeftLeg", w: [0.075, 0.075], m: 7.5, p: "pelvis", ang: 0.85, tw: 0.15 },
   { n: "lLegL", a: "LeftLeg", b: "LeftFoot", ext: 0.06, w: [0.06, 0.06], m: 4, p: "uLegL", ang: 0.75, tw: 0.1 },
-  { n: "uLegR", a: "RightUpLeg", b: "RightLeg", w: [0.075, 0.075], m: 7.5, p: "pelvis", ang: 0.85, tw: 0.25 },
+  { n: "uLegR", a: "RightUpLeg", b: "RightLeg", w: [0.075, 0.075], m: 7.5, p: "pelvis", ang: 0.85, tw: 0.15 },
   { n: "lLegR", a: "RightLeg", b: "RightFoot", ext: 0.06, w: [0.06, 0.06], m: 4, p: "uLegR", ang: 0.75, tw: 0.1 },
 ];
 const BN = n => "mixamorig" + n;
@@ -518,7 +518,11 @@ class Soldier {
       while (b && !(b.isBone && SEG_BY_BONE[b.name])) b = b.parent;
       const owner = b ? SEG_BY_BONE[b.name] : "pelvis";
       const bq = toQ(this.parts[owner].body.quaternion).invert().multiply(bone.getWorldQuaternion(new THREE.Quaternion()));
-      return { bone, owner, off: bq };
+      // limbs are aimed, never rolled: twisting a skinned arm crushes the mesh
+      const seg = SEGS.find(sg => "mixamorig" + sg.a === bone.name);
+      const limb = !!seg && /Arm|Leg/.test(seg.n);
+      const child = limb && this.bones[seg.b];
+      return { bone, owner, off: bq, rest: bone.quaternion.clone(), limb, dirLocal: child ? child.position.clone().normalize() : null, inLimb: /Arm|Leg/.test(owner) };
     });
     const pel = this.parts.pelvis.body;
     this.hipOffset = toQ(pel.quaternion).invert().clone();
@@ -670,9 +674,21 @@ class Soldier {
     const worldQ = new Map();
     const parentQ = new THREE.Quaternion();
     for (const d of this.drive) {
-      const want = toQ(this.parts[d.owner].body.quaternion).multiply(d.off);
       const parent = d.bone.parent;
       if (worldQ.has(parent)) parentQ.copy(worldQ.get(parent)); else parent.getWorldQuaternion(parentQ);
+      let want;
+      if (d.limb) {
+        // start from the pose it had when hit, then swing (no roll) so it points along its body
+        const base = parentQ.clone().multiply(d.rest);
+        const cur = d.dirLocal.clone().applyQuaternion(base);
+        const b = this.parts[d.owner].body;
+        const axis = V().set(0, 1, 0).applyQuaternion(toQ(b.quaternion));
+        want = new THREE.Quaternion().setFromUnitVectors(cur.normalize(), axis).multiply(base);
+      } else if (d.inLimb) {
+        want = parentQ.clone().multiply(d.rest); // hands, fingers, feet just follow
+      } else {
+        want = toQ(this.parts[d.owner].body.quaternion).multiply(d.off);
+      }
       d.bone.quaternion.copy(parentQ.clone().invert().multiply(want));
       worldQ.set(d.bone, want);
     }
