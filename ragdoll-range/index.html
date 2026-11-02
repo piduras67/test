@@ -26,6 +26,7 @@
   #feed.show { opacity: 1; transform: translateX(-50%) translateY(-6px); }
   #stats { position: absolute; left: 30px; bottom: 30px; font-size: 13px; letter-spacing: 2px; opacity: .75; text-shadow: 0 2px 6px #000; line-height: 1.7; }
   #slowmo { position: absolute; left: 50%; top: 24px; transform: translateX(-50%); font-size: 13px; letter-spacing: 6px; color: #8fd3ff; opacity: 0; transition: opacity .3s; }
+  #screenBlood { position: absolute; inset: 0; width: 100%; height: 100%; }
   #vignette { position: absolute; inset: 0; background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.55)); }
   #start { position: fixed; inset: 0; display: grid; place-items: center; background: radial-gradient(ellipse at center, rgba(20,8,8,.55), rgba(0,0,0,.92)); cursor: pointer; }
   #start .card { text-align: center; }
@@ -50,6 +51,7 @@
 <body>
 <div id="hud">
   <div id="vignette"></div>
+  <canvas id="screenBlood"></canvas>
   <div id="crosshair"><i class="t" id="ch-t"></i><i class="t" id="ch-b"></i><i class="l" id="ch-l"></i><i class="l" id="ch-r"></i></div>
   <div id="hitmarker"></div>
   <div id="feed"></div>
@@ -65,8 +67,8 @@
     <div class="keys">
       <div><kbd>W A S D</kbd>Move</div><div><kbd>Shift</kbd>Sprint</div>
       <div><kbd>Mouse 1</kbd>Shoot</div><div><kbd>Mouse 2</kbd>Aim down sights</div>
-      <div><kbd>R</kbd>Reload</div><div><kbd>1</kbd><kbd>2</kbd>Pistol / Rifle</div>
-      <div><kbd>E</kbd>Spawn person</div><div><kbd>C</kbd>Clean up</div>
+      <div><kbd>R</kbd>Reload</div><div><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd>Pistol / Rifle / Shotgun</div>
+      <div><kbd>E</kbd>Spawn target</div><div><kbd>T</kbd>Change target model</div><div><kbd>C</kbd>Clean up</div>
       <div><kbd>Q</kbd>Slow motion</div><div><kbd>Space</kbd>Jump</div>
     </div>
     <div class="go">CLICK ANYWHERE</div>
@@ -108,6 +110,92 @@ addEventListener("resize", () => {
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
+
+// ---------------------------------------------------------------- sound: everything is synthesised with Web Audio
+const Sound = (() => {
+  let ctx = null, master, reverbIn, noiseBuf;
+  function init() {
+    if (ctx) { ctx.resume(); return; }
+    ctx = new AudioContext();
+    master = ctx.createDynamicsCompressor(); master.threshold.value = -10; master.ratio.value = 6;
+    const vol = ctx.createGain(); vol.gain.value = 0.9; master.connect(vol); vol.connect(ctx.destination);
+    // a concrete room: decaying noise as the reverb impulse
+    const conv = ctx.createConvolver(), len = (ctx.sampleRate * 1.8) | 0, ir = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (let c = 0; c < 2; c++) { const d = ir.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3.5); }
+    conv.buffer = ir; reverbIn = ctx.createGain(); reverbIn.gain.value = 0.32; reverbIn.connect(conv); conv.connect(master);
+    noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+    const nd = noiseBuf.getChannelData(0); for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+  }
+  function out(pos, wet = 1) {
+    const g = ctx.createGain();
+    let tail = g;
+    if (pos) {
+      const pan = ctx.createPanner(); pan.panningModel = "HRTF"; pan.distanceModel = "inverse"; pan.refDistance = 2.5; pan.rolloffFactor = 1.1;
+      pan.positionX.value = pos.x; pan.positionY.value = pos.y; pan.positionZ.value = pos.z;
+      g.connect(pan); tail = pan;
+    }
+    tail.connect(master);
+    if (wet > 0) { const w = ctx.createGain(); w.gain.value = wet; tail.connect(w); w.connect(reverbIn); }
+    return g;
+  }
+  function noise(dest, t, dur, type, freq, q, gain, attack = 0.002) {
+    const src = ctx.createBufferSource(); src.buffer = noiseBuf;
+    const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(gain, t + attack); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f); f.connect(g); g.connect(dest); src.start(t, Math.random() * 1.5); src.stop(t + dur + 0.05);
+    return f;
+  }
+  function tone(dest, t, dur, f0, f1, gain, type = "sine") {
+    const o = ctx.createOscillator(); o.type = type;
+    o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t + dur);
+    const g = ctx.createGain(); g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(dest); o.start(t); o.stop(t + dur + 0.05);
+  }
+  const ok = () => ctx && ctx.state === "running";
+  const now = () => ctx.currentTime;
+  return {
+    init,
+    listener(cam) {
+      if (!ok()) return;
+      const l = ctx.listener, p = cam.getWorldPosition(new THREE.Vector3()), f = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion), u = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion);
+      if (l.positionX) { l.positionX.value = p.x; l.positionY.value = p.y; l.positionZ.value = p.z; l.forwardX.value = f.x; l.forwardY.value = f.y; l.forwardZ.value = f.z; l.upX.value = u.x; l.upY.value = u.y; l.upZ.value = u.z; }
+      else { l.setPosition(p.x, p.y, p.z); l.setOrientation(f.x, f.y, f.z, u.x, u.y, u.z); }
+    },
+    shot(kind) {
+      if (!ok()) return;
+      const t = now(), d = out(null, 1.2), big = kind === "shotgun" ? 1.5 : kind === "rifle" ? 1.05 : 0.85;
+      noise(d, t, 0.07 * big, "highpass", 1800, 0.4, 0.9);
+      noise(d, t, 0.32 * big, "lowpass", kind === "pistol" ? 1400 : 900, 0.6, 0.9 * big);
+      tone(d, t, 0.2 * big, 150, 38, 1.0 * big);
+      noise(d, t + 0.015, 0.7 * big, "bandpass", 350, 0.5, 0.22 * big, 0.02);
+      if (kind === "rifle") tone(d, t, 0.05, 2400, 900, 0.08, "square");
+    },
+    click(gain = 0.25, f = 2600, pos) { if (!ok()) return; const t = now(), d = out(pos, 0.3); noise(d, t, 0.03, "bandpass", f, 3, gain); tone(d, t, 0.02, f * 1.3, f, gain * 0.4, "triangle"); },
+    dry() { this.click(0.35, 3200); },
+    magOut() { if (!ok()) return; const t = now(), d = out(null, 0.3); noise(d, t, 0.05, "bandpass", 2200, 4, 0.3); noise(d, t + 0.03, 0.12, "bandpass", 1200, 2, 0.15); },
+    magIn() { if (!ok()) return; const t = now(), d = out(null, 0.3); noise(d, t, 0.06, "bandpass", 1500, 3, 0.35); tone(d, t, 0.05, 900, 500, 0.15, "triangle"); },
+    rack() { if (!ok()) return; const t = now(), d = out(null, 0.4); noise(d, t, 0.06, "bandpass", 1900, 3, 0.35); noise(d, t + 0.12, 0.07, "bandpass", 2600, 3, 0.4); tone(d, t + 0.12, 0.04, 1600, 900, 0.15, "triangle"); },
+    magFloor(pos) { if (!ok()) return; const t = now(), d = out(pos, 0.5); noise(d, t, 0.08, "bandpass", 900, 2, 0.4); tone(d, t, 0.12, 700, 420, 0.12, "triangle"); },
+    shell(pos) { if (!ok()) return; const t = now(), d = out(pos, 0.4); const f = rand(4200, 6200); tone(d, t, 0.18, f, f * 0.97, 0.08); tone(d, t, 0.12, f * 1.51, f * 1.5, 0.04); },
+    flesh(pos, heavy) {
+      if (!ok()) return; const t = now(), d = out(pos, 0.5);
+      noise(d, t, 0.16, "lowpass", 650, 1.2, heavy ? 0.9 : 0.6);
+      noise(d, t + 0.01, 0.22, "bandpass", 240, 2.5, 0.5);
+      tone(d, t, 0.14, 110, 45, heavy ? 0.7 : 0.45);
+    },
+    crunch(pos) { if (!ok()) return; const t = now(), d = out(pos, 0.5); for (let i = 0; i < 5; i++) noise(d, t + i * 0.012, 0.04, "bandpass", rand(1200, 2600), 4, 0.35); this.flesh(pos, true); },
+    gore(pos) {
+      if (!ok()) return; const t = now(), d = out(pos, 0.6);
+      for (let i = 0; i < 7; i++) noise(d, t + rand(0, 0.35), rand(0.08, 0.2), "lowpass", rand(400, 900), 1.5, rand(0.25, 0.5));
+      tone(d, t, 0.3, 70, 30, 0.6); noise(d, t, 0.5, "bandpass", 180, 1.5, 0.35, 0.01);
+    },
+    splat(pos, gain = 0.2) { if (!ok()) return; const t = now(), d = out(pos, 0.3); noise(d, t, 0.1, "lowpass", 800, 1.5, gain); },
+    thud(pos, strength) { if (!ok()) return; const t = now(), d = out(pos, 0.4), g = Math.min(1, strength / 6); tone(d, t, 0.18, 95, 40, 0.7 * g); noise(d, t, 0.12, "lowpass", 350, 1, 0.5 * g); },
+    metal(pos) { if (!ok()) return; const t = now(), d = out(pos, 0.6); for (const f of [rand(900, 1300), rand(1900, 2500), rand(3100, 3700)]) tone(d, t, 0.5, f, f * 0.99, 0.12, "triangle"); noise(d, t, 0.05, "highpass", 3000, 1, 0.4); },
+    ricochet(pos) { if (!ok()) return; const t = now(), d = out(pos, 0.7); noise(d, t, 0.06, "highpass", 2500, 1, 0.4); if (Math.random() < 0.35) tone(d, t + 0.01, 0.3, rand(2600, 3400), rand(900, 1300), 0.07, "triangle"); },
+    step(gain = 0.13) { if (!ok()) return; const t = now(), d = out(null, 0.1); noise(d, t, 0.09, "lowpass", 420, 1, gain); },
+  };
+})();
 
 // ---------------------------------------------------------------- procedural textures
 function canvasTexture(w, h, draw, repeat) {
@@ -161,12 +249,14 @@ const dummyHeadTex = canvasTexture(256, 128, (g, w, h) => {
 const bloodTextures = [0, 1, 2, 3].map(() => canvasTexture(256, 256, (g, w, h) => {
   const cx = w / 2, cy = h / 2;
   const grad = g.createRadialGradient(cx, cy, 4, cx, cy, 90);
-  grad.addColorStop(0, "rgba(70,0,0,1)"); grad.addColorStop(0.6, "rgba(110,4,4,.95)"); grad.addColorStop(1, "rgba(120,6,6,0)");
+  // drawn in greys and tinted per fluid by the material colour (blood, robot oil)
+  grad.addColorStop(0, "rgba(150,150,150,1)"); grad.addColorStop(0.6, "rgba(225,225,225,.95)"); grad.addColorStop(1, "rgba(240,240,240,0)");
   g.fillStyle = grad;
   g.beginPath(); g.arc(cx, cy, rand(40, 70), 0, Math.PI * 2); g.fill();
   for (let i = 0; i < 26; i++) {
     const a = rand(0, Math.PI * 2), d = rand(30, 110), r = rand(2, 14);
-    g.fillStyle = `rgba(${rand(80, 125) | 0},0,0,${rand(.7, 1)})`;
+    const v = rand(170, 255) | 0;
+    g.fillStyle = `rgba(${v},${v},${v},${rand(.7, 1)})`;
     g.beginPath(); g.arc(cx + Math.cos(a) * d, cy + Math.sin(a) * d, r, 0, Math.PI * 2); g.fill();
     if (Math.random() < .5) { // streaks
       g.strokeStyle = g.fillStyle; g.lineWidth = r * 0.7;
@@ -174,6 +264,13 @@ const bloodTextures = [0, 1, 2, 3].map(() => canvasTexture(256, 256, (g, w, h) =
     }
   }
 }));
+const dripTex = canvasTexture(32, 256, (g, w, h) => {
+  const grad = g.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, "rgba(220,220,220,.95)"); grad.addColorStop(0.85, "rgba(200,200,200,.85)"); grad.addColorStop(1, "rgba(200,200,200,0)");
+  g.fillStyle = grad;
+  g.beginPath(); g.moveTo(w * 0.3, 0); g.lineTo(w * 0.7, 0); g.lineTo(w * 0.56, h * 0.93); g.lineTo(w * 0.44, h * 0.93); g.fill();
+  g.beginPath(); g.arc(w / 2, h * 0.93, w * 0.17, 0, Math.PI * 2); g.fill();
+});
 const holeTex = canvasTexture(64, 64, (g, w, h) => {
   const grad = g.createRadialGradient(32, 32, 2, 32, 32, 30);
   grad.addColorStop(0, "rgba(0,0,0,1)"); grad.addColorStop(.3, "rgba(15,15,15,.9)"); grad.addColorStop(1, "rgba(30,30,30,0)");
@@ -300,44 +397,68 @@ function addStatic(mesh, shape, pos, quat) {
 // ---------------------------------------------------------------- blood and impact effects
 const MAX_P = 5000;
 const pGeo = new THREE.BufferGeometry();
-const pPos = new Float32Array(MAX_P * 3), pCol = new Float32Array(MAX_P * 3);
+const pPos = new Float32Array(MAX_P * 3), pCol = new Float32Array(MAX_P * 3), pSize = new Float32Array(MAX_P);
 pGeo.setAttribute("position", new THREE.BufferAttribute(pPos, 3));
 pGeo.setAttribute("color", new THREE.BufferAttribute(pCol, 3));
-const particles = new THREE.Points(pGeo, new THREE.PointsMaterial({ size: 0.045, map: dotTex, vertexColors: true, transparent: true, depthWrite: false, sizeAttenuation: true }));
+pGeo.setAttribute("size", new THREE.BufferAttribute(pSize, 1));
+// each droplet is a little shaded sphere with a highlight, sized in metres
+const pMat = new THREE.ShaderMaterial({
+  uniforms: { uScale: { value: 500 } },
+  vertexShader: `attribute float size; attribute vec3 color; varying vec3 vColor; uniform float uScale;
+    void main() { vColor = color; vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_PointSize = max(1.5, size * uScale / -mv.z); gl_Position = projectionMatrix * mv; }`,
+  fragmentShader: `varying vec3 vColor;
+    void main() {
+      vec2 c = gl_PointCoord - 0.5; float d = length(c);
+      if (d > 0.5) discard;
+      float light = 0.55 + 0.9 * (0.5 - d) - c.y * 0.35;
+      float spec = smoothstep(0.14, 0.0, length(c - vec2(-0.14, -0.16)));
+      gl_FragColor = vec4(vColor * light + spec * 0.35, 1.0);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }`,
+});
+const particles = new THREE.Points(pGeo, pMat);
 particles.frustumCulled = false;
 scene.add(particles);
 const P = [];
-for (let i = 0; i < MAX_P; i++) P.push({ alive: false, x: 0, y: -99, z: 0, vx: 0, vy: 0, vz: 0, life: 0, blood: true, splat: 0 });
+for (let i = 0; i < MAX_P; i++) P.push({ alive: false, x: 0, y: -99, z: 0, vx: 0, vy: 0, vz: 0, life: 0, blood: true, splat: 0, s: 0.03, fl: null });
 let pCursor = 0;
-function spawnParticle(pos, vel, blood, color, life, splat) {
+const FLUIDS = {
+  blood: { a: new THREE.Color(0x5a0000), b: new THREE.Color(0x9a0606), decal: 0x7a0606, mist: 0x7a0000, wound: 0x3a0000 },
+  oil: { a: new THREE.Color(0x0e0c0a), b: new THREE.Color(0x2a2218), decal: 0x1a1612, mist: 0x2a2620, wound: 0x0a0806, sparks: true },
+};
+function spawnParticle(pos, vel, blood, color, life, splat, size = 0.03, fluid = null) {
   const p = P[pCursor]; pCursor = (pCursor + 1) % MAX_P;
   p.alive = true; p.x = pos.x; p.y = pos.y; p.z = pos.z;
   p.vx = vel.x; p.vy = vel.y; p.vz = vel.z;
-  p.life = life; p.blood = blood; p.splat = splat;
+  p.life = life; p.blood = blood; p.splat = splat; p.s = size; p.fl = fluid;
   p.r = color.r; p.g = color.g; p.b = color.b;
 }
-const BLOOD_COLOR = new THREE.Color(0x6e0000), BLOOD_BRIGHT = new THREE.Color(0xa00808);
-function bloodBurst(pos, dir, count, speed, spread) {
+const fluidDrop = fl => (Math.random() < 0.5 ? fl.a : fl.b);
+function bloodBurst(pos, dir, count, speed, spread, fl = FLUIDS.blood) {
   const v = new THREE.Vector3();
   for (let i = 0; i < count; i++) {
     v.copy(dir).multiplyScalar(speed * rand(0.3, 1));
     v.x += rand(-spread, spread); v.y += rand(-spread, spread) + rand(0, 1.2); v.z += rand(-spread, spread);
-    spawnParticle(pos, v, true, Math.random() < .5 ? BLOOD_COLOR : BLOOD_BRIGHT, rand(0.8, 2.2), Math.random() < 0.18 ? 1 : 0);
+    const big = Math.random() < 0.25;
+    spawnParticle(pos, v, true, fluidDrop(fl), rand(0.8, 2.4), big || Math.random() < 0.12 ? 1 : 0, big ? rand(0.035, 0.06) : rand(0.01, 0.028), fl);
   }
+  if (fl.sparks) for (let i = 0; i < count * 0.4; i++) spawnParticle(pos, new THREE.Vector3(rand(-4, 4), rand(0, 5), rand(-4, 4)).addScaledVector(dir, 3), false, new THREE.Color(1.6, 1.1, 0.4), rand(0.2, 0.6), 0, rand(0.008, 0.018));
 }
 function dustBurst(pos, normal, count) {
   const v = new THREE.Vector3(), c = new THREE.Color(0x9a958c), spark = new THREE.Color(0xffc060);
   for (let i = 0; i < count; i++) {
     v.copy(normal).multiplyScalar(rand(1, 4)).add(new THREE.Vector3(rand(-1.5, 1.5), rand(-0.5, 2), rand(-1.5, 1.5)));
-    spawnParticle(pos, v, false, i < 4 ? spark : c, rand(0.25, 0.7), 0);
+    spawnParticle(pos, v, false, i < 4 ? spark : c, rand(0.25, 0.7), 0, i < 4 ? 0.012 : rand(0.015, 0.035));
   }
 }
 
 // blood mist sprites
 const mistMat = new THREE.SpriteMaterial({ map: dotTex, color: 0x7a0000, transparent: true, depthWrite: false, opacity: 0.8 });
 const mists = [];
-function bloodMist(pos, size) {
+function bloodMist(pos, size, fl = FLUIDS.blood) {
   const s = new THREE.Sprite(mistMat.clone());
+  s.material.color.set(fl.mist);
   s.position.copy(pos); s.scale.setScalar(size * 0.4);
   s.userData = { t: 0, size };
   scene.add(s); mists.push(s);
@@ -359,13 +480,73 @@ function addDecal(point, normal, size, tex, opacity, color) {
   if (decals.length > MAX_DECALS) { const old = decals.shift(); scene.remove(old); old.geometry.dispose(); old.material.dispose(); }
   return m;
 }
-const bloodSplat = (point, normal, size) => addDecal(point, normal, size, bloodTextures[(Math.random() * 4) | 0], rand(0.75, 0.95));
+// glossy splats, and on walls the bigger ones grow drips that run down
+const drips = [];
+function bloodSplat(point, normal, size, fl = FLUIDS.blood) {
+  const m = addDecal(point, normal, size, bloodTextures[(Math.random() * 4) | 0], rand(0.8, 0.97), fl.decal);
+  m.material.roughness = 0.12; m.material.metalness = 0.1;
+  if (Math.abs(normal.y) < 0.35 && size > 0.22) {
+    const along = new THREE.Vector3(0, 1, 0).cross(normal).normalize();
+    const count = 1 + Math.floor(Math.random() * 3 + size * 2);
+    for (let i = 0; i < count; i++) {
+      const w = rand(0.012, 0.03);
+      const geo = new THREE.PlaneGeometry(w, 1); geo.translate(0, -0.5, 0);
+      const d = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: dripTex, color: fl.decal, transparent: true, depthWrite: false, roughness: 0.1, metalness: 0.1, polygonOffset: true, polygonOffsetFactor: -6 }));
+      d.position.copy(point).addScaledVector(normal, 0.005).addScaledVector(along, rand(-0.35, 0.35) * size).y += rand(-0.1, 0.05) * size;
+      d.lookAt(d.position.clone().add(normal));
+      d.scale.y = 0.001;
+      d.userData = { len: rand(0.25, 1.1) * Math.min(1.5, size * 2), speed: rand(0.04, 0.12) };
+      scene.add(d); drips.push(d);
+      if (drips.length > 120) { const o = drips.shift(); scene.remove(o); o.geometry.dispose(); o.material.dispose(); }
+    }
+  }
+  return m;
+}
+
+// blood on the camera when something bursts right in front of you
+const screenBlood = document.getElementById("screenBlood");
+const sbCtx = screenBlood.getContext("2d");
+const screenDrops = [];
+function screenSplatter(amount, fl = FLUIDS.blood) {
+  const c = new THREE.Color(fl.decal);
+  for (let i = 0; i < amount; i++) {
+    screenDrops.push({ x: rand(0, 1), y: rand(0, 0.85), r: rand(6, 38) * (Math.random() < 0.15 ? 2.2 : 1), vy: rand(0.004, 0.03), life: rand(2.5, 5), age: 0,
+      col: `${(c.r * 255) | 0},${(c.g * 255) | 0},${(c.b * 255) | 0}` });
+  }
+}
+function drawScreenBlood(dt) {
+  const w = screenBlood.width = innerWidth, h = screenBlood.height = innerHeight;
+  sbCtx.clearRect(0, 0, w, h);
+  for (let i = screenDrops.length - 1; i >= 0; i--) {
+    const d = screenDrops[i];
+    d.age += dt; d.y += d.vy * dt * (d.r / 20);
+    const a = Math.max(0, 1 - d.age / d.life);
+    if (a <= 0) { screenDrops.splice(i, 1); continue; }
+    const x = d.x * w, y = d.y * h;
+    // a thin tapered trail where the drop has run, then the drop itself as a few overlapping blobs
+    const len = Math.min(h * 0.4, d.age * 34 * (d.r / 20));
+    if (len > 2) {
+      const tg = sbCtx.createLinearGradient(0, y - len, 0, y);
+      tg.addColorStop(0, `rgba(${d.col},0)`); tg.addColorStop(1, `rgba(${d.col},${0.45 * a})`);
+      sbCtx.fillStyle = tg;
+      sbCtx.beginPath(); sbCtx.moveTo(x - d.r * 0.05, y - len); sbCtx.lineTo(x + d.r * 0.05, y - len); sbCtx.lineTo(x + d.r * 0.22, y); sbCtx.lineTo(x - d.r * 0.22, y); sbCtx.fill();
+    }
+    d.blobs = d.blobs || Array.from({ length: 3 }, () => [rand(-0.45, 0.45), rand(-0.45, 0.45), rand(0.45, 0.8)]);
+    for (const [ox, oy, rr] of d.blobs) {
+      const bx = x + ox * d.r, by = y + oy * d.r, br = d.r * rr;
+      const g = sbCtx.createRadialGradient(bx - br * 0.35, by - br * 0.35, br * 0.05, bx, by, br);
+      g.addColorStop(0, `rgba(${d.col},${0.35 * a})`); g.addColorStop(0.75, `rgba(${d.col},${0.8 * a})`); g.addColorStop(1, `rgba(${d.col},0)`);
+      sbCtx.fillStyle = g;
+      sbCtx.beginPath(); sbCtx.arc(bx, by, br, 0, Math.PI * 2); sbCtx.fill();
+    }
+  }
+}
 
 // pools that slowly spread under a bleeding body part
 const pools = [];
-function growPool(x, z, max) {
+function growPool(x, z, max, fl = FLUIDS.blood) {
   for (const pl of pools) if (Math.hypot(pl.x - x, pl.z - z) < 0.35) { pl.max = Math.min(1.6, Math.max(pl.max, max) + 0.05); return; }
-  const m = bloodSplat(new THREE.Vector3(x, 0.002, z), new THREE.Vector3(0, 1, 0), 1);
+  const m = bloodSplat(new THREE.Vector3(x, 0.002, z), new THREE.Vector3(0, 1, 0), 1, fl);
   m.scale.setScalar(0.05);
   pools.push({ x, z, mesh: m, size: 0.05, max });
 }
@@ -375,10 +556,27 @@ const fleshMatVis = new THREE.MeshStandardMaterial({ color: 0x5a0606, roughness:
 const boneMat = new THREE.MeshStandardMaterial({ color: 0xe9e0cc, roughness: 0.5 });
 const loader = new GLTFLoader();
 const MODELS = {};
-const MODEL_FILES = { soldier: "models/Soldier.glb", xbot: "models/Xbot.glb" };
-const loadModels = () => Promise.all(Object.entries(MODEL_FILES).map(([k, url]) => loader.loadAsync(url).then(g => { MODELS[k] = g; })));
-
-const BN = n => "mixamorig" + n;
+const MIXAMO = n => "mixamorig" + n;
+const ROBOT_BONES = { Hips: "Hips", Spine: "Abdomen", Neck: "Neck", Head: "Head", LeftArm: "UpperArmL", LeftForeArm: "LowerArmL", LeftHand: "Palm2L",
+  RightArm: "UpperArmR", RightForeArm: "LowerArmR", RightHand: "Palm2R", LeftUpLeg: "UpperLegL", LeftLeg: "LowerLegL", LeftFoot: "FootL",
+  RightUpLeg: "UpperLegR", RightLeg: "LowerLegR", RightFoot: "FootR" };
+const MODEL_DEFS = {
+  soldier: { file: "models/Soldier.glb", label: "Soldier", bone: MIXAMO, idle: /^idle$/i, height: 1.8, fluid: "blood" },
+  xbot: { file: "models/Xbot.glb", label: "Mannequin", bone: MIXAMO, idle: /^idle$/i, height: 1.78, fluid: "blood" },
+  michelle: { file: "models/Michelle.glb", label: "Dancer", bone: MIXAMO, idle: /samba/i, height: 1.7, fluid: "blood" },
+  robot: { file: "models/RobotExpressive.glb", label: "Robot", bone: n => ROBOT_BONES[n] || n, idle: /^idle$/i, height: 1.65, fluid: "oil", owners: { FootL: "lLegL", FootR: "lLegR" } },
+};
+const loadModels = () => Promise.all(Object.entries(MODEL_DEFS).map(([k, def]) => loader.loadAsync(def.file).then(g => {
+  MODELS[k] = g;
+  // measure the skeleton (skinned bounding boxes are unreliable): head bone to foot bone is ~85% of standing height
+  g.scene.updateMatrixWorld(true);
+  const head = g.scene.getObjectByName(def.bone("Head")), foot = g.scene.getObjectByName(def.bone("LeftFoot"));
+  const span = head && foot ? head.getWorldPosition(new THREE.Vector3()).y - foot.getWorldPosition(new THREE.Vector3()).y : 0;
+  def.scale = span > 0.01 ? def.height * 0.85 / span : 1;
+  // which ragdoll part owns each bone, for this rig's bone names
+  def.segByBone = {};
+  for (const s of SEGS) def.segByBone[def.bone(s.a)] = s.n;
+}).catch(e => { console.warn("model failed", def.file, e); })));
 // ragdoll bodies are built along these bones the moment a person is first hit
 const SEGS = [
   { n: "pelvis", a: "Hips", b: "Spine", w: [0.15, 0.1], m: 9, hp: 220 },
@@ -393,8 +591,6 @@ const SEGS = [
   { n: "uLegR", a: "RightUpLeg", b: "RightLeg", w: [0.075, 0.075], m: 7, hp: 120, p: "pelvis", ang: 0.9, tw: 0.3 },
   { n: "lLegR", a: "RightLeg", b: "RightFoot", ext: 0.06, w: [0.06, 0.06], m: 4, hp: 100, p: "uLegR", ang: 0.75, tw: 0.1 },
 ];
-const SEG_BY_BONE = {};
-for (const s of SEGS) SEG_BY_BONE[BN(s.a)] = s.n;
 const ONE = new THREE.Vector3(1, 1, 1), TINY = new THREE.Vector3(1e-4, 1e-4, 1e-4);
 const toV3 = v => new THREE.Vector3(v.x, v.y, v.z);
 const toQ = q => new THREE.Quaternion(q.x, q.y, q.z, q.w);
@@ -407,13 +603,16 @@ class Dummy {
   constructor(kind, x, z, yaw = 0) {
     const g = MODELS[kind];
     this.kind = kind;
+    this.def = MODEL_DEFS[kind];
+    this.fluid = FLUIDS[this.def.fluid];
     this.root = SkeletonUtils.clone(g.scene);
+    this.root.scale.setScalar(this.def.scale);
     this.root.position.set(x, 0, z);
     this.root.rotation.y = yaw;
     this.prepare(this.root);
     scene.add(this.root);
     this.mixer = new THREE.AnimationMixer(this.root);
-    const clip = g.animations.find(a => /idle/i.test(a.name)) || g.animations[0];
+    const clip = g.animations.find(a => this.def.idle.test(a.name)) || g.animations[0];
     if (clip) this.mixer.clipAction(clip).play();
     this.mixer.update(Math.random() * 3);
     this.active = false; this.dead = false;
@@ -436,11 +635,12 @@ class Dummy {
     const bones = {};
     this.root.traverse(o => { if (o.isBone) bones[o.name] = o; });
     const wp = n => {
-      const o = bones[BN(n)] || this.root.getObjectByName(BN(n));
+      const BN = this.def.bone;
+      const o = BN(n) && (bones[BN(n)] || this.root.getObjectByName(BN(n)));
       if (o) return o.getWorldPosition(new THREE.Vector3());
       // some rigs have no head-tip marker: extend the neck-to-head line instead
-      const head = bones[BN("Head")].getWorldPosition(new THREE.Vector3());
-      const neck = bones[BN("Neck")].getWorldPosition(new THREE.Vector3());
+      const head = bones[this.def.bone("Head")].getWorldPosition(new THREE.Vector3());
+      const neck = bones[this.def.bone("Neck")].getWorldPosition(new THREE.Vector3());
       return head.clone().add(head.clone().sub(neck).normalize().multiplyScalar(0.22));
     };
     const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.root.quaternion);
@@ -461,6 +661,17 @@ class Dummy {
       body.position.set(center.x, center.y, center.z);
       body.quaternion.set(q.x, q.y, q.z, q.w);
       body.sleepSpeedLimit = 0.2; body.sleepTimeLimit = 0.8;
+      body.addEventListener("collide", e => {
+        const v = Math.abs(e.contact.getImpactVelocityAlongNormal());
+        const t = performance.now();
+        if (v > 2.2 && t - (this.lastThud || 0) > 90) {
+          this.lastThud = t;
+          const pos = toV3(body.position);
+          if (this.def.fluid === "oil") Sound.metal(pos); else Sound.thud(pos, v);
+          const part = Object.values(this.parts).find(p => p.body === body);
+          if (part && part.wounds > 0 && e.body.mass === 0 && pos.y < 0.5) bloodSplat(new THREE.Vector3(pos.x, 0.002, pos.z), new THREE.Vector3(0, 1, 0), rand(0.2, 0.45), this.fluid);
+        }
+      });
       world.addBody(body);
       const group = new THREE.Group(); scene.add(group);
       this.parts[s.n] = { def: s, body, group, hp: s.hp, wounds: 0, attached: true, start: a, dir, half: len / 2 };
@@ -481,8 +692,9 @@ class Dummy {
     this.offsets = {};
     for (const name in bones) {
       let b = bones[name];
-      while (b && !(b.isBone && SEG_BY_BONE[b.name])) b = b.parent;
-      const owner = b ? SEG_BY_BONE[b.name] : "pelvis";
+      const seg = this.def.segByBone;
+      while (b && !(b.isBone && seg[b.name])) b = b.parent;
+      const owner = (this.def.owners && this.def.owners[name]) || (b ? seg[b.name] : "pelvis");
       const body = this.parts[owner].body;
       const bodyM = new THREE.Matrix4().compose(toV3(body.position), toQ(body.quaternion), ONE);
       this.offsets[name] = { owner, offset: bodyM.invert().multiply(bones[name].matrixWorld) };
@@ -529,6 +741,7 @@ class Dummy {
     world.removeConstraint(this.joints[name]);
     // the cut-off piece is a second copy of the same skinned mesh that only shows this limb
     const piece = SkeletonUtils.clone(MODELS[this.kind].scene);
+    piece.scale.setScalar(this.def.scale);
     this.prepare(piece); scene.add(piece);
     this.views.push(this.makeView(piece, name));
     this.extra.push(piece);
@@ -549,9 +762,11 @@ class Dummy {
     const end = cap(part, this.pivot(name, "B"), outPiece);
     this.bleeders.push({ part: parent, local: stump, dir: outParent, t: 0, dur: name === "head" ? 5 : 3.5, rate: name === "head" ? 340 : 220 });
     this.bleeders.push({ part, local: end, dir: outPiece, t: 0, dur: 2.2, rate: 140 });
-    bloodBurst(at, new THREE.Vector3(0, 1, 0), 160, 3.5, 1.8);
-    bloodMist(at, 1.6);
-    for (let i = 0; i < 10; i++) spawnChunk(at);
+    bloodBurst(at, new THREE.Vector3(0, 1, 0), 220, 3.8, 1.9, this.fluid);
+    bloodMist(at, 1.8, this.fluid);
+    for (let i = 0; i < 14; i++) spawnChunk(at, this.fluid);
+    Sound.gore(at);
+    if (at.distanceTo(camera.position) < 3.5) screenSplatter(18, this.fluid);
   }
   remove() {
     scene.remove(this.root);
@@ -579,13 +794,18 @@ class Dummy {
       for (let k = 0; k < n; k++) {
         const v = dir.clone().multiplyScalar(rand(1.2, 3.2) * (0.4 + strength * pulse(b.t)));
         v.x += rand(-.3, .3); v.y += rand(-.2, .4); v.z += rand(-.3, .3);
-        spawnParticle(at, v, true, Math.random() < .5 ? BLOOD_COLOR : BLOOD_BRIGHT, rand(0.6, 1.6), Math.random() < 0.12 ? 1 : 0);
+        spawnParticle(at, v, true, fluidDrop(this.fluid), rand(0.6, 1.6), Math.random() < 0.14 ? 1 : 0, rand(0.012, 0.04), this.fluid);
       }
     }
     for (const k in this.parts) {
       const p = this.parts[k];
-      if (p.wounds > 0 && p.body.position.y < 0.3 && p.body.velocity.length() < 0.4 && Math.random() < dt * 1.5) {
-        growPool(p.body.position.x + rand(-.1, .1), p.body.position.z + rand(-.1, .1), Math.min(1.4, 0.35 + p.wounds * 0.12));
+      const speed = p.body.velocity.length();
+      if (p.wounds > 0 && p.body.position.y < 0.3 && speed < 0.4 && Math.random() < dt * 1.5) {
+        growPool(p.body.position.x + rand(-.1, .1), p.body.position.z + rand(-.1, .1), Math.min(1.6, 0.4 + p.wounds * 0.14), this.fluid);
+      }
+      // smeared trails where a bleeding part slides along the floor
+      if (p.wounds > 0 && p.body.position.y < 0.35 && speed > 0.7 && Math.random() < dt * 14) {
+        bloodSplat(new THREE.Vector3(p.body.position.x, 0.002, p.body.position.z), new THREE.Vector3(0, 1, 0), rand(0.12, 0.3), this.fluid);
       }
     }
   }
@@ -598,7 +818,8 @@ class Dummy {
       for (const e of view.entries) {
         const sr = this.severedRoot(e.owner);
         const visible = view.pieceRoot ? sr === view.pieceRoot : sr === null;
-        if (visible) { e.bone.matrixWorld.multiplyMatrices(bodyM[e.owner], e.offset); continue; }
+        const gone = view.pieceRoot && this.exploded && this.exploded.has(view.pieceRoot);
+        if (visible && !gone) { e.bone.matrixWorld.multiplyMatrices(bodyM[e.owner], e.offset); continue; }
         let cut;
         if (!view.pieceRoot) cut = this.pivot(sr, "A");
         else if (sr && sr !== view.pieceRoot && this.isBelow(sr, view.pieceRoot)) cut = this.pivot(sr, "A");
@@ -613,13 +834,28 @@ const pulse = t => 0.65 + 0.35 * Math.max(0, Math.sin(t * 9)); // arterial spurt
 
 // gore chunks: little lumps of flesh that bounce and leave a smear
 const chunks = [];
-const chunkGeo = new THREE.IcosahedronGeometry(0.025, 0);
-function spawnChunk(at) {
-  const m = new THREE.Mesh(chunkGeo, Math.random() < 0.8 ? fleshMatVis : boneMat);
-  m.position.copy(at); m.scale.setScalar(rand(0.6, 1.6)); m.castShadow = true;
-  m.userData = { v: new THREE.Vector3(rand(-2.5, 2.5), rand(1.5, 4.5), rand(-2.5, 2.5)), spin: new THREE.Vector3(rand(-9, 9), rand(-9, 9), rand(-9, 9)), rest: false, life: 25 };
+// lumpy flesh, bone shards and darker organ bits; robots shed bolts and plates instead
+function lumpy(radius, detail) {
+  const g = new THREE.IcosahedronGeometry(radius, detail);
+  const pos = g.attributes.position;
+  for (let i = 0; i < pos.count; i++) pos.setXYZ(i, pos.getX(i) * rand(0.7, 1.3), pos.getY(i) * rand(0.6, 1.2), pos.getZ(i) * rand(0.7, 1.3));
+  g.computeVertexNormals();
+  return g;
+}
+const GIB_GEOS = [lumpy(0.03, 1), lumpy(0.022, 1), lumpy(0.04, 1)];
+const SHARD_GEO = new THREE.BoxGeometry(0.012, 0.06, 0.014);
+const organMat = new THREE.MeshStandardMaterial({ color: 0x3a0812, roughness: 0.25, metalness: 0.1 });
+const plateMat = new THREE.MeshStandardMaterial({ color: 0x8a8f96, roughness: 0.4, metalness: 0.9 });
+function spawnChunk(at, fl = FLUIDS.blood, power = 1) {
+  const roll = Math.random();
+  let m;
+  if (fl.sparks) m = new THREE.Mesh(roll < 0.5 ? SHARD_GEO : GIB_GEOS[0], plateMat);
+  else if (roll < 0.15) m = new THREE.Mesh(SHARD_GEO, boneMat);
+  else m = new THREE.Mesh(GIB_GEOS[(Math.random() * 3) | 0], roll < 0.35 ? organMat : fleshMatVis);
+  m.position.copy(at); m.scale.setScalar(rand(0.6, 1.7)); m.castShadow = true;
+  m.userData = { v: new THREE.Vector3(rand(-2.8, 2.8), rand(1.5, 5), rand(-2.8, 2.8)).multiplyScalar(power), spin: new THREE.Vector3(rand(-12, 12), rand(-12, 12), rand(-12, 12)), rest: false, life: 25, fl, bounced: false };
   scene.add(m); chunks.push(m);
-  if (chunks.length > 120) scene.remove(chunks.shift());
+  if (chunks.length > 180) scene.remove(chunks.shift());
 }
 
 // ---------------------------------------------------------------- weapons (modelled from primitives)
@@ -697,11 +933,34 @@ function buildRifle() {
   return { root: g, slide: bolt, mag, muzzle, port };
 }
 
+function buildShotgun() {
+  const g = new THREE.Group();
+  const pump = new THREE.Group(); g.add(pump);
+  box(g, [0.045, 0.06, 0.26], [0, 0, 0.02], gunMetal); // receiver
+  cyl(g, 0.012, 0.5, [0, 0.012, -0.36], gunMetal); // barrel
+  cyl(g, 0.011, 0.4, [0, -0.016, -0.31], gunMetal); // tube magazine
+  box(g, [0.006, 0.006, 0.01], [0, 0.03, -0.6], gunAccent); // bead sight
+  box(pump, [0.05, 0.045, 0.16], [0, -0.014, -0.26], gunAccent); // pump
+  for (let i = 0; i < 7; i++) box(pump, [0.052, 0.004, 0.012], [0, -0.014, -0.32 + i * 0.02], gunPolymer);
+  box(g, [0.035, 0.1, 0.045], [0, -0.07, 0.17], gunPolymer, [-0.35, 0, 0]); // grip
+  box(g, [0.042, 0.075, 0.26], [0, -0.03, 0.34], gunAccent, [0.08, 0, 0]); // stock
+  box(g, [0.046, 0.1, 0.03], [0, -0.05, 0.47], gunPolymer); // pad
+  const guard = new THREE.Mesh(new THREE.TorusGeometry(0.022, 0.004, 8, 20, Math.PI), gunPolymer);
+  guard.rotation.set(0, Math.PI / 2, Math.PI); guard.position.set(0, -0.03, 0.1); g.add(guard);
+  const mag = new THREE.Group(); mag.position.set(0, -0.045, 0.05); g.add(mag);
+  cyl(mag, 0.009, 0.03, [0, 0, 0], new THREE.MeshStandardMaterial({ color: 0xb01818, roughness: 0.5 }));
+  const muzzle = new THREE.Object3D(); muzzle.position.set(0, 0.012, -0.62); g.add(muzzle);
+  const port = new THREE.Object3D(); port.position.set(0.03, 0.01, 0.0); g.add(port);
+  return { root: g, slide: pump, mag, muzzle, port };
+}
+
 const WEAPONS = {
   pistol: { name: "Pistol", build: buildPistol, damage: 45, rate: 0.14, auto: false, mag: 12, reload: 1.45, kick: 0.05, punch: 14, spread: 0.004,
             hip: new THREE.Vector3(0.17, -0.15, -0.36), ads: new THREE.Vector3(0, -0.081, -0.3), slideKick: 0.035 },
   rifle:  { name: "Rifle", build: buildRifle, damage: 32, rate: 0.085, auto: true, mag: 30, reload: 2.1, kick: 0.028, punch: 11, spread: 0.007,
             hip: new THREE.Vector3(0.16, -0.17, -0.42), ads: new THREE.Vector3(0, -0.105, -0.26), slideKick: 0.03 },
+  shotgun: { name: "Shotgun", build: buildShotgun, damage: 22, pellets: 9, rate: 0.75, auto: false, mag: 6, reload: 2.3, kick: 0.09, punch: 9, spread: 0.045,
+            hip: new THREE.Vector3(0.16, -0.16, -0.4), ads: new THREE.Vector3(0, -0.095, -0.3), slideKick: 0.07, pumpDelay: 0.28 },
 };
 const gunHolder = new THREE.Group(); camera.add(gunHolder);
 const guns = {};
@@ -740,7 +999,7 @@ const keys = {};
 let locked = false, mouseDown = false, aiming = false, slowmo = false;
 const input = { dx: 0, dy: 0 };
 const startEl = document.getElementById("start");
-startEl.addEventListener("click", () => renderer.domElement.requestPointerLock());
+startEl.addEventListener("click", () => { Sound.init(); renderer.domElement.requestPointerLock(); });
 document.addEventListener("pointerlockchange", () => {
   locked = document.pointerLockElement === renderer.domElement;
   startEl.style.display = locked ? "none" : "grid";
@@ -762,6 +1021,8 @@ document.addEventListener("keydown", e => {
   if (e.code === "KeyR") startReload();
   if (e.code === "Digit1") switchWeapon("pistol");
   if (e.code === "Digit2") switchWeapon("rifle");
+  if (e.code === "Digit3") switchWeapon("shotgun");
+  if (e.code === "KeyT") { spawnKind = (spawnKind + 1) % SPAWN_KINDS.length; feed(MODEL_DEFS[SPAWN_KINDS[spawnKind]].label.toUpperCase()); }
   if (e.code === "KeyE") spawnDummyInFront();
   if (e.code === "KeyC") cleanUp();
   if (e.code === "KeyQ") { slowmo = !slowmo; document.getElementById("slowmo").style.opacity = slowmo ? 1 : 0; }
@@ -772,7 +1033,7 @@ document.addEventListener("keyup", e => { keys[e.code] = false; });
 // ---------------------------------------------------------------- gun state and animation
 const gs = { cooldown: 0, reloading: false, reloadT: 0, switchT: 0, kick: 0, kickV: 0, slide: 0, swayX: 0, swayY: 0, bob: 0, ads: 0, spread: 0, magDropped: false };
 const raycaster = new THREE.Raycaster();
-let shotsFired = 0, hits = 0, headshots = 0, severed = 0;
+let shotHit = false, shotsFired = 0, hits = 0, headshots = 0, severed = 0;
 
 function switchWeapon(k) {
   if (current === guns[k] || gs.reloading) return;
@@ -785,13 +1046,13 @@ function switchWeapon(k) {
 
 function startReload() {
   if (gs.reloading || current.ammo === current.def.mag || gs.switchT > 0) return;
-  gs.reloading = true; gs.reloadT = 0; gs.magDropped = false;
+  gs.reloading = true; gs.reloadT = 0; gs.magDropped = false; gs.magIn = false; gs.racked = false;
   document.getElementById("reloadText").textContent = "RELOADING";
 }
 
 function tryShoot() {
   if (!locked || gs.cooldown > 0 || gs.reloading || gs.switchT > 0) return;
-  if (current.ammo <= 0) { startReload(); return; }
+  if (current.ammo <= 0) { Sound.dry(); gs.cooldown = 0.25; startReload(); return; }
   current.ammo--; gs.cooldown = current.def.rate; shotsFired++;
   updateAmmoUI();
   // recoil
@@ -804,34 +1065,42 @@ function tryShoot() {
   current.muzzle.getWorldPosition(flash.position);
   flash.scale.setScalar(rand(0.14, 0.22)); flash.material.rotation = rand(0, Math.PI * 2);
   flash.visible = true; flash.userData.t = 0.045;
-  gunLight.intensity = 6;
-  ejectShell();
-  // the bullet
-  const spread = (aiming ? 0.25 : 1) * (current.def.spread + gs.spread);
-  const dir = new THREE.Vector3(rand(-spread, spread), rand(-spread, spread), -1).normalize().applyQuaternion(camera.quaternion);
+  gunLight.intensity = current.def.pellets ? 10 : 6;
+  if (current.def.pellets) { flash.scale.multiplyScalar(1.6); setTimeout(ejectShell, current.def.pumpDelay * 1000); gs.pumpAt = current.def.pumpDelay; }
+  else ejectShell();
+  Sound.shot(current === guns.shotgun ? "shotgun" : current === guns.rifle ? "rifle" : "pistol");
+  // the bullet (or a spread of pellets)
   const origin = camera.getWorldPosition(new THREE.Vector3());
   for (const m of dummyMeshes) { m.boundingSphere = null; m.boundingBox = null; }
-  raycaster.set(origin, dir); raycaster.far = 80;
-  const hit = raycaster.intersectObjects([...dummyMeshes, ...worldMeshes], false)[0];
-  tracer(origin, dir, hit ? hit.distance : 60);
-  if (!hit) return;
-  const info = partByMesh.get(hit.object);
-  if (info) hitDummy(info, hit, dir);
-  else hitWorld(hit);
+  const n = current.def.pellets || 1;
+  shotHit = false;
+  for (let i = 0; i < n; i++) {
+    const spread = (aiming ? (n > 1 ? 0.7 : 0.25) : 1) * (current.def.spread + gs.spread);
+    const dir = new THREE.Vector3(rand(-spread, spread), rand(-spread, spread), -1).normalize().applyQuaternion(camera.quaternion);
+    raycaster.set(origin, dir); raycaster.far = 80;
+    const hit = raycaster.intersectObjects([...dummyMeshes, ...worldMeshes], false)[0];
+    tracer(origin, dir, hit ? hit.distance : 60);
+    if (!hit) continue;
+    const info = partByMesh.get(hit.object);
+    if (info) hitDummy(info, hit, dir, i > 0);
+    else hitWorld(hit, i > 0);
+  }
+  if (shotHit) hits++; // a shotgun blast counts once, however many pellets land
 }
 
-function hitWorld(hit) {
+function hitWorld(hit, quiet) {
   const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
   addDecal(hit.point, n, rand(0.05, 0.07), holeTex, 0.95);
-  dustBurst(hit.point, n, 12);
+  dustBurst(hit.point, n, quiet ? 5 : 12);
+  if (!quiet) Sound.ricochet(hit.point);
 }
 
-function hitDummy(info, hit, dir) {
+function hitDummy(info, hit, dir, quiet) {
   const { dummy } = info;
   dummy.activate();
   const name = dummy.nearestPart(hit.point);
   const part = dummy.parts[name];
-  hits++;
+  shotHit = true;
   const head = name === "head";
   const dmg = current.def.damage * (head ? 2.2 : 1) * rand(0.9, 1.1);
   part.hp -= dmg; part.wounds++;
@@ -841,36 +1110,56 @@ function hitDummy(info, hit, dir) {
   b.applyImpulse(imp, new CANNON.Vec3(hit.point.x - b.position.x, hit.point.y - b.position.y, hit.point.z - b.position.z));
   // wound decal on the part
   const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
-  const wound = new THREE.Mesh(new THREE.CircleGeometry(rand(0.018, 0.026), 14), new THREE.MeshStandardMaterial({ map: bloodTextures[0], color: 0x5a0000, transparent: true, roughness: 0.2, polygonOffset: true, polygonOffsetFactor: -2 }));
+  const fl = dummy.fluid;
+  const wound = new THREE.Mesh(new THREE.CircleGeometry(rand(0.022, 0.034), 14), new THREE.MeshStandardMaterial({ map: bloodTextures[(Math.random() * 4) | 0], color: fl.wound, transparent: true, roughness: 0.1, metalness: 0.1, polygonOffset: true, polygonOffsetFactor: -2 }));
   part.group.updateMatrixWorld(true);
   const local = part.group.worldToLocal(hit.point.clone().addScaledVector(n, 0.003));
   wound.position.copy(local);
   wound.lookAt(part.group.worldToLocal(hit.point.clone().add(n)));
   part.group.add(wound);
   // entry spray back toward the shooter, exit spray out the back
-  bloodBurst(hit.point, n, head ? 90 : 45, 2.2, 0.9);
-  bloodBurst(hit.point, dir, head ? 120 : 60, 5.5, 0.7);
-  bloodMist(hit.point, head ? 1.3 : 0.8);
-  dummy.bleeders.push({ part, local: local.clone(), dir: local.clone().normalize(), t: 0, dur: 2.5, rate: 26 });
+  const scale = quiet ? 0.45 : 1;
+  bloodBurst(hit.point, n, (head ? 110 : 60) * scale, 2.4, 0.9, fl);
+  bloodBurst(hit.point, dir, (head ? 160 : 90) * scale, 6, 0.8, fl);
+  bloodMist(hit.point, head ? 1.5 : 0.9, fl);
+  dummy.bleeders.push({ part, local: local.clone(), dir: local.clone().normalize(), t: 0, dur: 2.5, rate: 30 });
+  dummy.bleeders.push({ part, local: local.clone(), dir: new THREE.Vector3(0, -1, 0), t: 0, dur: 9, rate: 7 }); // slow drip
+  if (!quiet) { if (fl.sparks) Sound.metal(hit.point); else if (head) Sound.crunch(hit.point); else Sound.flesh(hit.point); }
+  if (hit.distance < 2.5 && !quiet) screenSplatter(head ? 9 : 4, fl);
   // splatter the wall or floor behind
   raycaster.set(hit.point, dir); raycaster.far = 4;
   const behind = raycaster.intersectObjects(worldMeshes, false)[0];
   if (behind) {
     const bn = behind.face.normal.clone().transformDirection(behind.object.matrixWorld);
-    bloodSplat(behind.point, bn, rand(0.4, 0.8) * (head ? 1.6 : 1));
+    bloodSplat(behind.point, bn, rand(0.4, 0.8) * (head ? 1.6 : 1) * (quiet ? 0.6 : 1), fl);
   }
   showHit(head);
   if (head) { headshots++; feed(part.hp <= 0 ? "HEADSHOT" : "HEAD"); }
   if (part.hp <= 0 && dummy.joints[name] && part.attached) {
+    // a big enough overkill to the head bursts it instead of knocking it off
+    const burst = head && part.hp < -45;
     dummy.sever(name); severed++;
-    if (head) feed("DECAPITATED");
+    if (burst) {
+      dummy.exploded = dummy.exploded || new Set(); dummy.exploded.add("head");
+      const at = toV3(part.body.position);
+      bloodBurst(at, dir, 420, 6, 2.6, fl); bloodBurst(at, new THREE.Vector3(0, 1, 0), 200, 3, 2.2, fl);
+      bloodMist(at, 2.8, fl); bloodMist(at, 1.8, fl);
+      for (let i = 0; i < 30; i++) spawnChunk(at, fl, 1.5);
+      raycaster.set(at, dir); raycaster.far = 6;
+      const wall = raycaster.intersectObjects(worldMeshes, false)[0];
+      if (wall) bloodSplat(wall.point, wall.face.normal.clone().transformDirection(wall.object.matrixWorld), rand(1.0, 1.6), fl);
+      if (at.distanceTo(camera.position) < 4) screenSplatter(30, fl);
+      world.removeBody(part.body);
+      feed("HEAD EXPLODED");
+    } else if (head) feed("DECAPITATED");
     else feed("DISMEMBERED");
   }
   // torso destroyed: the whole dummy comes apart at every joint
   if ((name === "chest" || name === "pelvis") && part.hp <= -120 && !dummy.dead) {
     dummy.dead = true;
     for (const k of ["head", "uArmL", "uArmR", "uLegL", "uLegR"]) if (dummy.parts[k].attached) { dummy.sever(k); severed++; }
-    for (let i = 0; i < 30; i++) spawnChunk(hit.point);
+    for (let i = 0; i < 40; i++) spawnChunk(hit.point, fl, 1.4);
+    bloodBurst(hit.point, new THREE.Vector3(0, 1, 0), 400, 4, 2.5, fl);
     feed("OBLITERATED");
   }
 }
@@ -903,21 +1192,26 @@ function spawnDummyInFront() {
   p.x = Math.max(ROOM.minX + 1, Math.min(ROOM.maxX - 1, p.x));
   p.z = Math.max(ROOM.minZ + 1, Math.min(ROOM.maxZ - 1, p.z));
   new Dummy(nextKind(), p.x, p.z, player.yaw); // facing the player
-  if (dummies.length > 6) dummies[0].remove();
+  if (dummies.length > 8) dummies[0].remove();
 }
 function cleanUp() {
   while (dummies.length) dummies[0].remove();
   for (const d of decals) { scene.remove(d); d.geometry.dispose(); d.material.dispose(); }
   decals.length = 0; pools.length = 0;
   for (const c of chunks) scene.remove(c); chunks.length = 0;
+  for (const d of drips) { scene.remove(d); d.geometry.dispose(); d.material.dispose(); } drips.length = 0; screenDrops.length = 0;
   for (const s of shells) scene.remove(s); shells.length = 0;
   for (const m of droppedMags) scene.remove(m); droppedMags.length = 0;
   for (const p of P) p.alive = false;
   spawnStart();
 }
-let kindIndex = 0;
-function nextKind() { return ["soldier", "xbot"][kindIndex++ % 2]; }
-function spawnStart() { new Dummy("soldier", -1.4, -3.5, 0); new Dummy("xbot", 1.4, -3.5, 0); new Dummy("soldier", 0, -7.5, 0); }
+const SPAWN_KINDS = ["soldier", "xbot", "michelle", "robot"];
+let spawnKind = 0;
+function nextKind() { return MODELS[SPAWN_KINDS[spawnKind]] ? SPAWN_KINDS[spawnKind] : "soldier"; }
+function spawnStart() {
+  const lineup = [["soldier", -2.4, -3.5], ["xbot", -0.8, -3.5], ["michelle", 0.8, -3.5], ["robot", 2.4, -3.5], ["soldier", 0, -8]];
+  for (const [k, x, z] of lineup) if (MODELS[k]) new Dummy(k, x, z, 0);
+}
 const loadingEl = document.getElementById("loading");
 if (location.protocol === "file:") {
   loadingEl.textContent = "Open this through the local server: double-click start.bat (Windows) or run start.sh";
@@ -973,7 +1267,8 @@ function step() {
   gs.bob += realDt * moving * (sprint ? 1.9 : 1.6);
   gs.kickV += (-gs.kick * 420 - gs.kickV * 26) * realDt;
   gs.kick += gs.kickV * realDt;
-  gs.slide = Math.max(0, gs.slide - realDt * 14);
+  if (gs.pumpAt !== undefined && gs.pumpAt > -0.3) { gs.pumpAt -= realDt; if (current === guns.shotgun) gs.slide = gs.pumpAt < 0 ? Math.sin(Math.min(1, -gs.pumpAt / 0.3) * Math.PI) : 0; if (gs.pumpAt < 0 && !gs.pumpSound) { gs.pumpSound = true; Sound.rack(); } }
+  else { gs.pumpSound = false; gs.slide = Math.max(0, gs.slide - realDt * 14); }
   const d = current.def;
   const base = d.hip.clone().lerp(d.ads, gs.ads);
   const bobAmt = (1 - gs.ads * 0.85) * Math.min(1, moving / 4);
@@ -995,6 +1290,7 @@ function step() {
     } else if (t < 0.55) {
       if (!gs.magDropped) {
         gs.magDropped = true;
+        Sound.magOut();
         const drop = mag.clone(); mag.getWorldPosition(drop.position); mag.getWorldQuaternion(drop.quaternion);
         drop.scale.setScalar(1);
         drop.userData = { v: new THREE.Vector3(0, -1, 0).add(player.vel), spin: new THREE.Vector3(rand(-6, 6), rand(-3, 3), rand(-6, 6)), life: 20 };
@@ -1003,10 +1299,12 @@ function step() {
       }
       mag.visible = false;
     } else if (t < 0.8) {
+      if (!gs.magIn && t > 0.72) { gs.magIn = true; Sound.magIn(); }
       mag.visible = true;
       mag.position.copy(current.magHome).y -= (1 - (t - 0.55) / 0.25) * 0.14;
     } else {
       mag.position.copy(current.magHome);
+      if (!gs.racked) { gs.racked = true; Sound.rack(); }
       gs.slide = Math.max(gs.slide, Math.sin((t - 0.8) / 0.2 * Math.PI)); // rack the slide
     }
     if (t >= 1) {
@@ -1049,14 +1347,24 @@ function step() {
     else if (p.x <= ROOM.minX) { hitN = tmpV.set(1, 0, 0); p.x = ROOM.minX + 0.002; }
     else if (p.x >= ROOM.maxX) { hitN = tmpV.set(-1, 0, 0); p.x = ROOM.maxX - 0.002; }
     if (hitN) {
-      if (p.blood && (p.splat || Math.random() < 0.08)) bloodSplat(new THREE.Vector3(p.x, p.y, p.z), hitN.clone(), rand(0.06, 0.22));
+      if (p.blood && (p.splat || Math.random() < 0.08)) bloodSplat(new THREE.Vector3(p.x, p.y, p.z), hitN.clone(), rand(0.06, 0.22) * (p.s > 0.035 ? 1.6 : 1), p.fl || FLUIDS.blood);
       p.alive = false;
     }
     if (p.life <= 0) p.alive = false;
     pPos[i * 3] = p.x; pPos[i * 3 + 1] = p.alive ? p.y : -99; pPos[i * 3 + 2] = p.z;
     pCol[i * 3] = p.r; pCol[i * 3 + 1] = p.g; pCol[i * 3 + 2] = p.b;
+    pSize[i] = p.s;
   }
-  pGeo.attributes.position.needsUpdate = true; pGeo.attributes.color.needsUpdate = true;
+  pGeo.attributes.position.needsUpdate = true; pGeo.attributes.color.needsUpdate = true; pGeo.attributes.size.needsUpdate = true;
+  pMat.uniforms.uScale.value = renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
+  for (const d of drips) if (d.scale.y < d.userData.len) d.scale.y = Math.min(d.userData.len, d.scale.y + d.userData.speed * dt * (1.2 - d.scale.y / d.userData.len));
+  drawScreenBlood(realDt);
+  Sound.listener(camera);
+  // footsteps
+  if (player.onGround && moving > 0.5) {
+    gs.stepT = (gs.stepT || 0) - realDt * moving;
+    if (gs.stepT <= 0) { gs.stepT = 1.7; Sound.step(sprint ? 0.18 : 0.12); }
+  }
 
   // mist, pools, chunks, shells, mags, tracers
   for (let i = mists.length - 1; i >= 0; i--) {
@@ -1070,12 +1378,19 @@ function step() {
     for (const m of arr) {
       const u = m.userData;
       if (u.rest) continue;
+      // flying gibs trail droplets
+      if (arr === chunks && Math.random() < 0.5) spawnParticle(m.position, new THREE.Vector3(rand(-.3, .3), 0, rand(-.3, .3)), true, fluidDrop(u.fl || FLUIDS.blood), 0.8, 0, rand(0.008, 0.016), u.fl);
       u.v.y -= 9.8 * dt;
       m.position.addScaledVector(u.v, dt);
       m.rotation.x += u.spin.x * dt; m.rotation.y += u.spin.y * dt; m.rotation.z += u.spin.z * dt;
       if (m.position.y < radius) {
         m.position.y = radius;
-        if (Math.abs(u.v.y) < 0.6) { u.rest = true; if (arr === chunks) bloodSplat(m.position.clone().setY(0.001), new THREE.Vector3(0, 1, 0), rand(0.08, 0.16)); }
+        if (Math.abs(u.v.y) > 0.8) {
+          if (arr === shells) Sound.shell(m.position);
+          else if (arr === droppedMags) Sound.magFloor(m.position);
+          else if (arr === chunks) { Sound.splat(m.position, 0.12); if (!u.bounced) { u.bounced = true; bloodSplat(m.position.clone().setY(0.001), new THREE.Vector3(0, 1, 0), rand(0.1, 0.22), u.fl || FLUIDS.blood); } }
+        }
+        if (Math.abs(u.v.y) < 0.6) u.rest = true;
         u.v.y = -u.v.y * bounce; u.v.x *= 0.6; u.v.z *= 0.6; u.spin.multiplyScalar(0.5);
       }
       m.position.x = Math.max(ROOM.minX, Math.min(ROOM.maxX, m.position.x));
@@ -1092,7 +1407,7 @@ function step() {
   if (hmT > 0) { hmT -= realDt; if (hmT <= 0) hm.style.opacity = 0; }
   if (feedT > 0) { feedT -= realDt; if (feedT <= 0) feedEl.classList.remove("show"); }
   const acc = shotsFired ? Math.round(hits / shotsFired * 100) : 0;
-  statsEl.innerHTML = `SHOTS ${shotsFired} &nbsp; ACCURACY ${acc}%<br>HEADSHOTS ${headshots} &nbsp; LIMBS ${severed}`;
+  statsEl.innerHTML = `SHOTS ${shotsFired} &nbsp; ACCURACY ${acc}%<br>HEADSHOTS ${headshots} &nbsp; LIMBS ${severed}<br>SPAWN [T]: ${MODEL_DEFS[SPAWN_KINDS[spawnKind]].label.toUpperCase()}`;
 
   scene.updateMatrixWorld();
   for (const dm of dummies) dm.pose();
@@ -1102,7 +1417,7 @@ updateAmmoUI();
 step();
 
 // handle for automated testing
-window.__game = { player, camera, dummies, tryShoot: () => { const l = locked; locked = true; gs.cooldown = 0; tryShoot(); locked = l; }, guns, gs, switchWeapon, startReload };
+window.__game = { renderer, scene, player, camera, dummies, tryShoot: () => { const l = locked; locked = true; gs.cooldown = 0; tryShoot(); locked = l; }, guns, gs, switchWeapon, startReload };
 </script>
 </body>
 </html>
