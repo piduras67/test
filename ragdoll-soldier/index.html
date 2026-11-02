@@ -503,7 +503,8 @@ class Soldier {
   // ---------------------------------------------------------- the ragdoll is built the moment he's hit
   becomeRagdoll(point, dir, fightBack, neck) {
     this.state = "ragdoll"; this.t = 0;
-    this.mixer.stopAllAction();
+    // freeze the idle pose where it is. (stopping the animation would snap the skeleton back to its T-pose)
+    this.mixer.timeScale = 0;
     this.root.updateMatrixWorld(true);
     // every physics part sits exactly on its bone: same origin, same rotation.
     // the shape is offset along the bone toward its child, so the bone just copies the part's rotation.
