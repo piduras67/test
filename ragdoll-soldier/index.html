@@ -610,6 +610,7 @@ class Soldier {
   }
   hit(point, normal, dir) {
     const R = this.bodyRegion(point, dir);
+    if (this.frozen) { this.frozen = false; for (const k in this.parts) { this.parts[k].still = 0; this.parts[k].body.wakeUp(); } }
     const neck = R.mode === "neck", head = R.mode === "head";
     if (this.state === "idle") this.becomeRagdoll(point, dir, !head, neck);
     const region = this.nearestPart(point);
@@ -914,6 +915,7 @@ class Soldier {
     for (const s of SEGS) {
       if (!s.p) continue;
       const c = this.joints[s.n], part = this.parts[s.n], A = this.parts[s.p].body, B = part.body;
+      if (B.sleepState === CANNON.Body.SLEEPING) continue;
       const rel = A.quaternion.inverse().mult(B.quaternion);
       const d = c.rest.inverse().mult(rel);                       // change since the hit, in the part's own frame
       const a = part.axis;
@@ -922,7 +924,8 @@ class Soldier {
       const tw = Math.atan2(Math.sin(twist), Math.cos(twist));
       const lim = TWIST_LIMIT[s.n] || 0.3;
       if (Math.abs(tw) <= lim) continue;
-      const excess = tw - Math.sign(tw) * lim;
+      // ease it back over a few frames rather than snapping, so it can't fight a contact that's pushing the other way
+      const excess = (tw - Math.sign(tw) * lim) * 0.35;
       const fix = new CANNON.Quaternion(); fix.setFromAxisAngle(new CANNON.Vec3(a.x, a.y, a.z), -excess);
       B.quaternion = B.quaternion.mult(fix); B.quaternion.normalize();
       // and stop any further roll in that direction
@@ -940,11 +943,30 @@ class Soldier {
     this.stepGrip();
     for (const k in this.parts) { const { body, group } = this.parts[k]; group.position.copy(body.position); group.quaternion.copy(body.quaternion); }
     if (!this.balance && this.t > 2) {
-      for (const k in this.parts) {
-        const part = this.parts[k], b = part.body;
-        const quiet = b.velocity.length() < 0.35 && b.angularVelocity.length() < 1.2;
-        part.still = quiet ? (part.still || 0) + dt : 0;
-        if (part.still > 0.4 && b.sleepState !== CANNON.Body.SLEEPING) { b.velocity.set(0, 0, 0); b.angularVelocity.set(0, 0, 0); b.sleep(); }
+      // judge stillness by where a part actually goes, not its speed: a part wedged between the body and the
+      // floor can vibrate fast while going nowhere, and that is exactly what should be frozen
+      this.stillClock = (this.stillClock || 0) + dt;
+      if (this.stillClock >= 0.2) {
+        this.stillClock = 0;
+        for (const k in this.parts) {
+          const part = this.parts[k], b = part.body;
+          if (b.sleepState === CANNON.Body.SLEEPING) continue;
+          const pos = toV(b.position), q = toQ(b.quaternion);
+          if (part.lastPos) {
+            const moved = pos.distanceTo(part.lastPos), turned = 1 - Math.abs(q.dot(part.lastQ));
+            part.still = moved < 0.012 && turned < 0.0008 ? (part.still || 0) + 0.2 : 0;
+            if (part.still >= 0.6) { b.velocity.set(0, 0, 0); b.angularVelocity.set(0, 0, 0); b.sleep(); }
+          }
+          part.lastPos = pos; part.lastQ = q;
+        }
+        // once the torso has settled, the whole body rests together (only a new bullet wakes it)
+        const P = this.parts;
+        const torsoStill = (P.chest.still || 0) >= 0.6 || P.chest.body.sleepState === CANNON.Body.SLEEPING;
+        const hipsStill = (P.pelvis.still || 0) >= 0.6 || P.pelvis.body.sleepState === CANNON.Body.SLEEPING;
+        if (torsoStill && hipsStill && !this.frozen) {
+          this.frozen = true;
+          for (const k in P) { const b = P[k].body; b.velocity.set(0, 0, 0); b.angularVelocity.set(0, 0, 0); b.sleep(); }
+        }
       }
     }
   }
