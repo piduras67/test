@@ -1532,7 +1532,7 @@ document.addEventListener("mousemove", e => {
   md.x += e.movementX; md.y += e.movementY;
 });
 let weapon = "pistol";
-const sw = { kind: null, t: 0, dir: 1, hitParts: new Set(), prev: [], recover: 0 };
+const sw = { kind: null, t: 0, dir: -1, hitParts: new Set(), prev: [], recover: 0 };
 function setWeapon(w) {
   if (weapon === w || gs.reloading) return;
   weapon = w;
@@ -1542,7 +1542,7 @@ function setWeapon(w) {
 }
 function swordAttack(kind) {
   if (sw.kind && sw.t < (sw.kind === "slash" ? 0.3 : 0.38)) return;
-  sw.kind = kind; sw.t = 0; sw.hitParts.clear(); sw.prev = []; sw.clanged = false;
+  sw.fromP = sword.position.clone(); sw.fromQ = sword.quaternion.clone(); sw.kind = kind; sw.t = 0; sw.hitParts.clear(); sw.prev = []; sw.clanged = false;
   if (kind === "slash") sw.dir = -sw.dir; // alternate directions
   setTimeout(() => Sound.whoosh(kind === "slash" ? 1 : 0.7), kind === "slash" ? 80 : 110);
 }
@@ -1624,38 +1624,63 @@ function shoot() {
   hitEl.style.opacity = 1; hitT = 0.12;
 }
 
-// sword poses in camera space; the blade runs along the sword's local +Y
+// sword poses in camera space; the blade runs along the sword's local +Y.
+// a pose = where the hand is, which way the blade points, and which way its edge faces
+function bladeQ(dir, edge) {
+  const y = dir.clone().normalize(), x = edge.clone().addScaledVector(y, -edge.dot(y)).normalize(), z = new THREE.Vector3().crossVectors(x, y);
+  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+}
+const v3 = (x, y, z) => new THREE.Vector3(x, y, z);
+const slashCache = {};
+// d = 1 cuts right to left (forehand), d = -1 left to right (backhand); the edge always leads
+function slashKeys(d) {
+  if (slashCache[d]) return slashCache[d];
+  const e = v3(-d, -0.35, 0);
+  const keys = [
+    { t: 0.13, p: v3(0.3 * d, -0.1, -0.46), q: bladeQ(v3(0.8 * d, 0.6, -0.15), e), ease: "in" },   // cocked back over the shoulder
+    { t: 0.2, p: v3(0.04 * d, -0.17, -0.48), q: bladeQ(v3(0.45 * d, 0.2, -0.85), e), ease: "lin" },       // cutting through in front
+    { t: 0.27, p: v3(-0.28 * d, -0.3, -0.44), q: bladeQ(v3(-0.75 * d, -0.3, -0.55), e), ease: "out" }, // followed through low across the body
+    { t: 0.36, p: v3(-0.32 * d, -0.36, -0.42), q: bladeQ(v3(-0.8 * d, -0.4, -0.4), e) },              // momentum carries it a little further
+    { t: 0.5, p: v3(0.1, -0.62, -0.36), q: bladeQ(v3(0.2, 0.3, -0.9), v3(-1, 0, 0)) },               // drops out of view while it comes back
+    { t: 0.68 },
+  ];
+  keys.hit = [0.12, 0.29];
+  return (slashCache[d] = keys);
+}
+const STAB_KEYS = (() => {
+  const dir = v3(-0.12, 0.12, -1.6), e = v3(0, 1, 0).cross(dir); // flat blade, point at the crosshair
+  const k = [
+    { t: 0.16, p: v3(0.22, -0.24, -0.22), q: bladeQ(dir, e), ease: "in" },  // drawn back
+    { t: 0.25, p: v3(0.08, -0.2, -0.72), q: bladeQ(dir, e), ease: "out" }, // thrust
+    { t: 0.36, p: v3(0.09, -0.21, -0.68), q: bladeQ(dir, e) },              // held in
+    { t: 0.52 },
+  ];
+  k.hit = [0.17, 0.3];
+  return k;
+})();
 const ease = x => x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2;
 function updateSword(realDt, dt, moving, sprint) {
   const bob = Math.min(1, moving / 4);
   let px = 0.27 + gs.swayX + Math.cos(gs.bob) * 0.012 * bob, py = -0.3 + gs.swayY + Math.abs(Math.sin(gs.bob)) * 0.014 * bob - (sprint ? 0.03 : 0), pz = -0.48;
-  let ry = 0.15, rx = -0.75, rz = -0.35; // resting: blade up and forward, a little canted
-  let active = false;
+  // resting: blade up and forward, a little canted
+  const restQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.75, 0.15, -0.35, "YXZ"));
+  const restP = new THREE.Vector3(px, py, pz);
+  let P = restP, Q = restQ, active = false;
   if (sw.kind) {
     sw.t += dt;
-    if (sw.kind === "slash") {
-      const T = 0.46, u = sw.t / T, d = sw.dir;
-      // wind up (0-.22), cut across (.22-.5), follow through and recover
-      const wind = THREE.MathUtils.smoothstep(u, 0, 0.22), cut = ease(THREE.MathUtils.clamp((u - 0.22) / 0.28, 0, 1)), back = THREE.MathUtils.smoothstep(u, 0.6, 1);
-      const a = THREE.MathUtils.lerp(d * 1.45 * wind, -d * 1.25, cut);
-      px = THREE.MathUtils.lerp(px, 0.32 * Math.sign(a || 1) * 0.6 + 0.05, (wind + cut) * 0.6 * (1 - back)) ; py = THREE.MathUtils.lerp(py, -0.17 - cut * 0.12, (1 - back));
-      pz = THREE.MathUtils.lerp(pz, -0.5, 1 - back);
-      ry = THREE.MathUtils.lerp(ry, a, 1 - back); rx = THREE.MathUtils.lerp(rx, -1.32, 1 - back); rz = THREE.MathUtils.lerp(rz, d * 0.55 + (cut - 0.5) * -d * 0.5, 1 - back);
-      active = u > 0.22 && u < 0.52;
-      if (u >= 1) sw.kind = null;
-    } else {
-      const T = 0.5, u = sw.t / T;
-      const pull = THREE.MathUtils.smoothstep(u, 0, 0.25), thrust = ease(THREE.MathUtils.clamp((u - 0.25) / 0.17, 0, 1)), back = THREE.MathUtils.smoothstep(u, 0.55, 1);
-      const k = 1 - back;
-      px = THREE.MathUtils.lerp(px, 0.1, k); py = THREE.MathUtils.lerp(py, -0.2, k);
-      pz = THREE.MathUtils.lerp(pz, -0.35 + pull * 0.12 - thrust * 0.62, k);
-      ry = THREE.MathUtils.lerp(ry, 0.04, k); rx = THREE.MathUtils.lerp(rx, -1.55, k); rz = THREE.MathUtils.lerp(rz, -1.57, k); // flat blade, point first
-      active = u > 0.25 && u < 0.5;
-      if (u >= 1) sw.kind = null;
+    const keys = sw.kind === "slash" ? slashKeys(sw.dir) : STAB_KEYS;
+    const T = keys[keys.length - 1].t;
+    if (sw.t >= T) sw.kind = null;
+    else {
+      const all = [{ t: 0, p: sw.fromP || restP, q: sw.fromQ || restQ }, ...keys.slice(0, -1), { t: T, p: restP, q: restQ }];
+      let i = 0; while (i < all.length - 2 && sw.t > all[i + 1].t) i++;
+      const A = all[i], B = all[i + 1], f = THREE.MathUtils.clamp((sw.t - A.t) / (B.t - A.t), 0, 1);
+      const k = (A.ease || "inout") === "in" ? f * f : A.ease === "out" ? 1 - (1 - f) * (1 - f) : A.ease === "lin" ? f : ease(f);
+      P = A.p.clone().lerp(B.p, k); Q = A.q.clone().slerp(B.q, k);
+      active = keys.hit && sw.t > keys.hit[0] && sw.t < keys.hit[1];
     }
   }
-  sword.position.set(px, py, pz);
-  sword.rotation.order = "YXZ"; sword.rotation.set(rx, ry, rz);
+  sword.position.copy(P); sword.quaternion.copy(Q);
   sword.updateMatrixWorld(true);
   // blade sample points, swept from last frame so a fast cut can't skip past him
   const pts = [];
@@ -1667,7 +1692,7 @@ function updateSword(realDt, dt, moving, sprint) {
         const p = sw.prev[i].clone().lerp(pts[i], f);
         // the blade stops on walls and crates
         const ph = !sw.clanged && propHit(p, sw.prev[i]);
-        if (ph) { sw.clanged = true; Sound.clang(ph.point); dust(ph.point, 1, 0xc9c3b8); bulletHole(ph.point, ph.normal, 0.025); sw.t = Math.max(sw.t, sw.kind === "slash" ? 0.3 : 0.32); break; }
+        if (ph) { sw.clanged = true; Sound.clang(ph.point); dust(ph.point, 1, 0xc9c3b8); bulletHole(ph.point, ph.normal, 0.025); break; }
         for (const s of soldiers) {
           const probe = s.probe(p);
           if (!probe || probe.d > 0.035 || sw.hitParts.has(s.id + probe.name)) continue;
@@ -1849,7 +1874,7 @@ new GLTFLoader().load("models/Soldier.glb", g => {
 loop();
 
 // testing hooks
-window.__game = { setWeapon: w => setWeapon(w), swordAttack: k => swordAttack(k), player, soldiers, camera, shoot: () => { gs.cd = 0; shoot(); }, update, render, spawnTarget };
+window.__game = { renderer, sw, sword, setWeapon: w => setWeapon(w), swordAttack: k => swordAttack(k), player, soldiers, camera, shoot: () => { gs.cd = 0; shoot(); }, update, render, spawnTarget };
 </script>
 </body>
 </html>
