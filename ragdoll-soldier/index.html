@@ -216,6 +216,12 @@ const Sound = (() => {
     },
     drip(pos) { if (!ok()) return; const t = ctx.currentTime, d = out(pos, 0.1), f = rand(900, 1500); tone(d, t, 0.06, f, f * 1.8, 0.05); },
     step(gain) { if (!ok()) return; const t = ctx.currentTime, d = out(null, 0.05); noise(d, t, 0.08, "lowpass", 450, 1, gain); noise(d, t, 0.04, "highpass", 3000, 1, gain * 0.25); },
+    // wet, bubbling breaths through blood
+    gurgle(pos, s = 1) {
+      if (!ok()) return; const t = ctx.currentTime, d = out(pos, 0.15);
+      for (let i = 0; i < 9; i++) noise(d, t + i * rand(0.035, 0.07), rand(0.04, 0.09), "bandpass", rand(260, 620), 6, 0.16 * s);
+      noise(d, t, 0.6, "bandpass", 500, 1.5, 0.06 * s, 0.1);
+    },
     breath(pos) { if (!ok()) return; const t = ctx.currentTime, d = out(pos, 0.1); noise(d, t, 0.5, "bandpass", 700, 1.2, 0.08, 0.15); },
   };
 })();
@@ -226,7 +232,7 @@ world.broadphase = new CANNON.SAPBroadphase(world);
 world.allowSleep = true;
 world.solver.iterations = 30;
 const groundMat = new CANNON.Material("ground"), fleshMat = new CANNON.Material("flesh");
-world.addContactMaterial(new CANNON.ContactMaterial(groundMat, fleshMat, { friction: 0.7, restitution: 0.02 }));
+world.addContactMaterial(new CANNON.ContactMaterial(groundMat, fleshMat, { friction: 0.8, restitution: 0, contactEquationStiffness: 5e6, contactEquationRelaxation: 5, frictionEquationStiffness: 5e6, frictionEquationRelaxation: 5 }));
 const ground = new CANNON.Body({ mass: 0, material: groundMat, shape: new CANNON.Plane() });
 ground.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
 world.addBody(ground);
@@ -453,8 +459,9 @@ class Soldier {
 
   // ---------------------------------------------------------- hits
   hit(point, normal, dir) {
-    const head = this.state === "idle" ? this.headHit(point) : this.nearestPart(point) === "head";
-    if (this.state === "idle") this.becomeRagdoll(point, dir, !head);
+    const neck = this.neckHit(point, dir);
+    const head = !neck && this.headHit(point, dir);
+    if (this.state === "idle") this.becomeRagdoll(point, dir, !head, neck);
     const region = this.nearestPart(point);
     const part = this.parts[region];
     // push the part that was hit
@@ -470,18 +477,31 @@ class Soldier {
     wound.add(stain);
     part.group.add(wound);
     this.wounds.push({ obj: wound, region });
-    this.bleed.push({ obj: wound, t: 0, dur: head ? 4 : 12, rate: head ? 40 : 14 });
+    if (!this.gripWound) this.gripWound = wound;
+    // a neck wound is arterial: it spurts with the heartbeat for a long time
+    this.bleed.push(neck ? { obj: wound, t: 0, dur: 16, rate: 90, artery: true } : { obj: wound, t: 0, dur: head ? 4 : 12, rate: head ? 40 : 14 });
     spray(point, normal, head ? 60 : 26, 1.6, 0.5);
     spray(point, dir, head ? 100 : 40, 4.5, 0.5);
     if (head) Sound.crack(point); else Sound.flesh(point);
-    this.hp -= head ? 200 : 40;
+    if (neck) { spray(point, normal, 50, 3.2, 0.35, 0.006, 0.016); this.gurgleAt = 0.6; }
+    this.hp -= head ? 200 : neck ? 60 : 40;
     if (head) this.balance = null;                       // instantly limp
     else if (this.balance && this.balance.t > 0.2) this.balance.dur = Math.max(this.balance.t + 0.5, this.balance.dur - 0.9); // more hits, sooner down
   }
-  headHit(point) { return point.distanceTo(this.boneWorld("Head")) < 0.2; }
+  // the neck runs from the Neck bone up to the Head bone; the skull sits above the Head bone
+  // does the bullet's path pass through the neck / skull? (armour and collars are just surface, the path is what matters)
+  rayDistTo(point, dir, p) { const v = p.clone().sub(point); return v.sub(dir.clone().multiplyScalar(v.dot(dir))).length(); }
+  neckHit(point, dir) {
+    const a = this.boneWorld("Neck"), b = this.boneWorld("Head");
+    let best = Infinity;
+    for (let i = 0; i <= 6; i++) best = Math.min(best, this.rayDistTo(point, dir, a.clone().lerp(b, i / 6)));
+    const skull = this.rayDistTo(point, dir, b.clone().add(new THREE.Vector3(0, 0.1, 0)));
+    return best < 0.065 && best < skull;
+  }
+  headHit(point, dir) { return this.rayDistTo(point, dir, this.boneWorld("Head").add(new THREE.Vector3(0, 0.1, 0))) < 0.12; }
 
   // ---------------------------------------------------------- the ragdoll is built the moment he's hit
-  becomeRagdoll(point, dir, fightBack) {
+  becomeRagdoll(point, dir, fightBack, neck) {
     this.state = "ragdoll"; this.t = 0;
     this.mixer.stopAllAction();
     this.root.updateMatrixWorld(true);
@@ -530,6 +550,7 @@ class Soldier {
         axisA: A.quaternion.inverse().vmult(dirWorld), axisB: new CANNON.Vec3(B.axis.x, B.axis.y, B.axis.z),
         angle: s.ang, twistAngle: s.tw, collideConnected: false, maxForce: 1e7,
       });
+      for (const eq of c.equations) eq.setSpookParams(2e6, 6, 1 / 180);
       world.addConstraint(c); this.joints[s.n] = c;
     }
     // the bones each part drives, in parent-first order
@@ -537,7 +558,8 @@ class Soldier {
     if (fightBack) {
       this.startPuppet(point, dir);
       const local = point.clone().applyMatrix4(this.root.matrixWorld.clone().invert());
-      this.hand = local.x > 0 ? "L" : "R";
+      this.hands = neck ? ["L", "R"] : [local.x > 0 ? "L" : "R"];
+      this.hand = this.hands[0];
       Sound.breath(point);
     }
   }
@@ -582,9 +604,9 @@ class Soldier {
     P.Neck.rotateX(0.25 + 0.2 * buckle);
     for (const sd of ["Left", "Right"]) { P[sd + "UpLeg"].rotateX(-0.9 * buckle); P[sd + "Leg"].rotateX(1.6 * buckle); P[sd + "Foot"].rotateX(-0.5 * buckle); }
     this.puppet.updateMatrixWorld(true);
-    if (this.hand && this.wounds.length) {
-      const H = this.hand === "L" ? "Left" : "Right";
-      const target = this.wounds[0].obj.getWorldPosition(V());
+    for (const hs of (this.gripWound ? this.hands || [] : [])) {
+      const H = hs === "L" ? "Left" : "Right";
+      const target = this.gripWound.getWorldPosition(V());
       const fwd = V().set(0, 0, 1).applyQuaternion(this.puppet.quaternion);
       // the wound rides the ragdoll; aim at the same spot on the puppet's chest
       const cb = this.parts.chest.body;
@@ -601,34 +623,47 @@ class Soldier {
     const blend = Math.min(1, strength * dt * 22);
     for (const sdef of SEGS) {
       const body = this.parts[sdef.n].body;
+      const armBlend = /Arm/.test(sdef.n) ? ((this.hands || []).includes(sdef.n.slice(-1)) ? 0 : 0.25) : 1; // the grabbing arm is left to the hand pull
       const T = { c: P[sdef.a].getWorldPosition(V()), q: P[sdef.a].getWorldQuaternion(new THREE.Quaternion()) };
       const vT = T.c.sub(toV(body.position)).multiplyScalar(10);
-      body.velocity.x += (vT.x - body.velocity.x) * blend;
-      body.velocity.y += (vT.y - body.velocity.y) * blend;
-      body.velocity.z += (vT.z - body.velocity.z) * blend;
+      const bl = blend * armBlend;
+      if (bl <= 0) continue;
+      body.velocity.x += (vT.x - body.velocity.x) * bl;
+      body.velocity.y += (vT.y - body.velocity.y) * bl;
+      body.velocity.z += (vT.z - body.velocity.z) * bl;
       const qe = T.q.clone().multiply(toQ(body.quaternion).invert());
       if (qe.w < 0) { qe.x *= -1; qe.y *= -1; qe.z *= -1; qe.w *= -1; }
       const ang = 2 * Math.acos(Math.min(1, qe.w)), sn = Math.sqrt(Math.max(1e-9, 1 - qe.w * qe.w));
       const wT = new THREE.Vector3(qe.x / sn, qe.y / sn, qe.z / sn).multiplyScalar(ang * 10);
-      body.angularVelocity.x += (wT.x - body.angularVelocity.x) * blend;
-      body.angularVelocity.y += (wT.y - body.angularVelocity.y) * blend;
-      body.angularVelocity.z += (wT.z - body.angularVelocity.z) * blend;
+      body.angularVelocity.x += (wT.x - body.angularVelocity.x) * bl;
+      body.angularVelocity.y += (wT.y - body.angularVelocity.y) * bl;
+      body.angularVelocity.z += (wT.z - body.angularVelocity.z) * bl;
       body.wakeUp();
     }
     if (Math.random() < dt * 0.7) Sound.breath(toV(this.parts.chest.body.position));
   }
   // the hand presses on the wound; a weak spring, so a fall can pull it away
   stepGrip() {
-    if (!this.hand || !this.balance || !this.wounds.length) return;
-    const fore = this.parts[this.hand === "L" ? "lArmL" : "lArmR"];
-    const w = this.wounds[0].obj.getWorldPosition(V());
+    if (!this.hands || !this.balance || !this.gripWound) return;
+    for (const hs of this.hands) this.gripHand(hs, this.hands.length);
+  }
+  gripHand(hs, count) {
+    const fore = this.parts[hs === "L" ? "lArmL" : "lArmR"];
+    const upper = this.parts[hs === "L" ? "uArmL" : "uArmR"];
+    // a holding arm is tense, not floppy: kill its spin so it doesn't jiggle against the elbow limit
+    for (const part of [fore, upper]) { const w = part.body.angularVelocity; w.scale(0.86, w); }
+    const w = this.gripWound.getWorldPosition(V()).add(V().set(hs === "L" ? 0.03 : -0.03, 0, 0).applyQuaternion(toQ(this.parts.chest.body.quaternion)));
     const tip = toV(fore.body.position).add(fore.axis.clone().applyQuaternion(toQ(fore.body.quaternion)).multiplyScalar(fore.len * 0.9));
     const pull = w.sub(tip);
-    const strength = 0.6 * (1 - this.balance.t / this.balance.dur);
-    const f = pull.multiplyScalar(260 * strength).sub(toV(fore.body.velocity).multiplyScalar(14 * strength));
-    fore.body.applyForce(new CANNON.Vec3(f.x, f.y, f.z), new CANNON.Vec3(tip.x, tip.y, tip.z));
+    const strength = THREE.MathUtils.smoothstep(this.balance.t, 0.1, 0.5) * (1 - this.balance.t / this.balance.dur);
+    // a critically damped spring, so the hand settles onto the wound instead of bouncing
+    const kSpring = 160 * strength, damp = 3 * Math.sqrt(kSpring * fore.body.mass); // a touch over-damped: settles without wobble
+    if (pull.length() > 0.5) pull.setLength(0.5);
+    const f = pull.multiplyScalar(kSpring).sub(toV(fore.body.velocity).sub(toV(this.parts.chest.body.velocity)).multiplyScalar(damp));
+    const rel = tip.clone().sub(toV(fore.body.position));
+    fore.body.applyForce(new CANNON.Vec3(f.x, f.y, f.z), new CANNON.Vec3(rel.x, rel.y, rel.z)); // point relative to the body's centre
     const chest = this.parts.chest.body;
-    chest.applyForce(new CANNON.Vec3(-f.x * 0.5, -f.y * 0.5, -f.z * 0.5), chest.position);
+    chest.applyForce(new CANNON.Vec3(-f.x * 0.5 / count, -f.y * 0.5 / count, -f.z * 0.5 / count));
   }
 
   nearestPart(point) {
@@ -659,6 +694,14 @@ class Soldier {
     this.stepBalance(dt);
     this.stepGrip();
     for (const k in this.parts) { const { body, group } = this.parts[k]; group.position.copy(body.position); group.quaternion.copy(body.quaternion); }
+    if (!this.balance && this.t > 2) {
+      for (const k in this.parts) {
+        const part = this.parts[k], b = part.body;
+        const quiet = b.velocity.length() < 0.35 && b.angularVelocity.length() < 1.2;
+        part.still = quiet ? (part.still || 0) + dt : 0;
+        if (part.still > 0.4 && b.sleepState !== CANNON.Body.SLEEPING) { b.velocity.set(0, 0, 0); b.angularVelocity.set(0, 0, 0); b.sleep(); }
+      }
+    }
   }
   // before the scene matrices update: set bone rotations (and the hips' position) from the bodies
   pose() {
@@ -684,16 +727,31 @@ class Soldier {
     for (const b of this.bleed) {
       b.t += dt; if (b.t > b.dur) continue;
       const strength = 1 - b.t / b.dur;
-      const n = Math.floor(b.rate * dt * strength * (0.6 + 0.4 * Math.max(0, Math.sin(b.t * 7))) + Math.random() * 0.6);
-      if (!n) continue;
       const at = b.obj.getWorldPosition(V());
       const out = V().set(0, 1, 0).applyQuaternion(b.obj.getWorldQuaternion(new THREE.Quaternion()));
+      if (b.artery) {
+        // heartbeat around 100 bpm that slows and weakens as he bleeds out
+        const bpm = 105 - 55 * (1 - strength);
+        b.beat = (b.beat || 0) + dt * bpm / 60;
+        const phase = b.beat % 1;
+        const spurt = phase < 0.22 ? Math.sin(phase / 0.22 * Math.PI) : 0;
+        const n = Math.floor(b.rate * dt * (0.15 + spurt * 2.2) * Math.max(0.15, strength) + Math.random() * 0.7);
+        for (let i = 0; i < n; i++) {
+          const v = out.clone().multiplyScalar((0.6 + spurt * 2.6) * Math.max(0.35, strength) * rand(0.75, 1.1)).add(new THREE.Vector3(rand(-0.12, 0.12), rand(-0.05, 0.12), rand(-0.12, 0.12)));
+          drop(at, v, spurt > 0.4 ? rand(0.006, 0.013) : rand(0.004, 0.008));
+        }
+        if (b.t < 9) { this.gurgleAt = (this.gurgleAt || 0) - dt; if (this.gurgleAt <= 0) { this.gurgleAt = rand(0.9, 1.8); Sound.gurgle(at, strength); } }
+        continue;
+      }
+      const n = Math.floor(b.rate * dt * strength * (0.6 + 0.4 * Math.max(0, Math.sin(b.t * 7))) + Math.random() * 0.6);
+      if (!n) continue;
       for (let i = 0; i < n; i++) drop(at, out.clone().multiplyScalar(rand(0.1, 0.5)).add(new THREE.Vector3(rand(-0.1, 0.1), -0.15, rand(-0.1, 0.1))), rand(0.004, 0.008));
     }
     // once he's lying still the wounds pool on the ground
     if (this.state === "ragdoll" && !this.balance && this.t > 3) for (const w of this.wounds) {
       const p = w.obj.getWorldPosition(V());
-      if (p.y < 0.4 && Math.random() < dt * 0.8) pool(p.x, p.z, 0.55 + this.wounds.length * 0.15);
+      const artery = this.bleed.some(b => b.artery);
+      if (p.y < 0.4 && Math.random() < dt * 0.8) pool(p.x, p.z, (artery ? 1.3 : 0.55) + this.wounds.length * 0.15);
     }
   }
   remove() {
@@ -791,7 +849,7 @@ function shoot() {
 function spawnTarget() {
   const fwd = V().set(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
   const p = player.pos.clone().addScaledVector(fwd, 7);
-  new Soldier(p.x, p.z, player.yaw);
+  new Soldier(p.x, p.z, player.yaw + Math.PI); // facing you
   if (soldiers.length > 3) soldiers[0].remove();
 }
 
@@ -926,7 +984,7 @@ new GLTFLoader().load("models/Soldier.glb", g => {
   const head = g.scene.getObjectByName(BN("Head")), foot = g.scene.getObjectByName(BN("LeftFoot"));
   const span = head.getWorldPosition(V()).y - foot.getWorldPosition(V()).y;
   MODEL_SCALE = span > 0.01 ? 1.8 * 0.85 / span : 1;
-  new Soldier(0, -5, 0);
+  new Soldier(0, -5, Math.PI);
   document.getElementById("startText").textContent = "Click to start";
   setTimeout(() => (document.getElementById("help").style.opacity = 0), 9000);
 }, undefined, e => { document.getElementById("startText").textContent = location.protocol === "file:" ? "Run start.bat to open this through localhost" : "Couldn't load the soldier model"; });
