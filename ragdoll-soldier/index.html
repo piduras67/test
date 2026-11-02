@@ -551,6 +551,9 @@ class Soldier {
         axisA: A.quaternion.inverse().vmult(dirWorld), axisB: new CANNON.Vec3(B.axis.x, B.axis.y, B.axis.z),
         angle: s.ang, twistAngle: s.tw, collideConnected: false, maxForce: 1e7,
       });
+      // the library measures twist against reference axes it picks itself, so a natural pose can already read as
+      // "over-twisted" and the solver fights it forever (the arm jitter). let the cone hold the swing; damping limits roll.
+      c.twistEquation.enabled = false;
       for (const eq of c.equations) eq.setSpookParams(2e6, 6, 1 / 180);
       world.addConstraint(c); this.joints[s.n] = c;
     }
