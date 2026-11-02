@@ -34,7 +34,7 @@
 <div id="hud">
   <div id="dot"></div>
   <div id="hit"></div>
-  <div id="help">LMB fire &nbsp;·&nbsp; RMB aim &nbsp;·&nbsp; R reload &nbsp;·&nbsp; E new target &nbsp;·&nbsp; Q slow motion</div>
+  <div id="help">1 pistol &nbsp;·&nbsp; 2 sword &nbsp;·&nbsp; LMB fire / slash &nbsp;·&nbsp; RMB aim / stab &nbsp;·&nbsp; R reload &nbsp;·&nbsp; E new target &nbsp;·&nbsp; Q slow motion</div>
   <div id="ammo"><b id="mag">12</b> / 12</div>
 </div>
 <div id="start"><div><div class="t" id="startText">Loading…</div><div class="s">WASD to move</div></div></div>
@@ -251,6 +251,19 @@ const Sound = (() => {
       for (let i = 0; i < 9; i++) noise(d, t + i * rand(0.035, 0.07), rand(0.04, 0.09), "bandpass", rand(260, 620), 6, 0.16 * s);
       noise(d, t, 0.6, "bandpass", 500, 1.5, 0.06 * s, 0.1);
     },
+    // a blade cutting the air: a band of noise that sweeps up in pitch
+    whoosh(power = 1) {
+      if (!ok()) return; const t = ctx.currentTime, d = out(null, 0.15);
+      const src = ctx.createBufferSource(); src.buffer = nbuf;
+      const f = ctx.createBiquadFilter(); f.type = "bandpass"; f.Q.value = 1.4;
+      f.frequency.setValueAtTime(350, t); f.frequency.exponentialRampToValueAtTime(1900 * power, t + 0.16);
+      const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.32 * power, t + 0.06); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.24);
+      src.connect(f); f.connect(g); g.connect(d); src.start(t, Math.random()); src.stop(t + 0.3);
+    },
+    slice(pos) { if (!ok()) return; const t = ctx.currentTime, d = out(pos, 0.3); noise(d, t, 0.12, "highpass", 2400, 0.8, 0.3); noise(d, t, 0.18, "lowpass", 700, 1.2, 0.55); tone(d, t, 0.1, 140, 60, 0.35); },
+    stab(pos) { if (!ok()) return; const t = ctx.currentTime, d = out(pos, 0.3); noise(d, t, 0.22, "lowpass", 500, 1.5, 0.7); tone(d, t, 0.16, 95, 40, 0.6); noise(d, t + 0.02, 0.1, "bandpass", 1600, 4, 0.18); },
+    sever(pos) { if (!ok()) return; const t = ctx.currentTime, d = out(pos, 0.35); for (let i = 0; i < 4; i++) noise(d, t + i * 0.012, 0.04, "bandpass", rand(1300, 2600), 4, 0.35); noise(d, t, 0.35, "lowpass", 600, 1, 0.6); tone(d, t, 0.25, 80, 35, 0.5); },
+    clang(pos) { if (!ok()) return; const t = ctx.currentTime, d = out(pos, 0.5); for (const f of [rand(1500, 1900), rand(3100, 3700), rand(5200, 6000)]) tone(d, t, 0.6, f, f * 0.995, 0.09, "triangle"); noise(d, t, 0.04, "highpass", 3500, 1, 0.4); },
     // a body settling: heavy low thump, cloth, a little kit
     slump(pos) {
       if (!ok()) return; const t = ctx.currentTime, d = out(pos, 0.35);
@@ -659,6 +672,45 @@ const muzzle = new THREE.Object3D(); muzzle.position.set(0, 0.03, -0.118); gun.a
 const port = new THREE.Object3D(); port.position.set(0.02, 0.04, -0.01); gun.add(port);
 gun.traverse(o => { if (o.isMesh) o.renderOrder = 5; });
 
+// ================================================================ the sword
+const sword = new THREE.Group(); camera.add(sword); sword.visible = false;
+const swordModel = new THREE.Group(); sword.add(swordModel);
+{
+  const steel = new THREE.MeshPhysicalMaterial({ color: 0xd9dde2, metalness: 1, roughness: 0.2, clearcoat: 0.4, clearcoatRoughness: 0.15 });
+  const darkSteel = new THREE.MeshPhysicalMaterial({ color: 0x8d939b, metalness: 1, roughness: 0.32 });
+  const guardMetal = new THREE.MeshStandardMaterial({ color: 0x3b3a38, metalness: 0.9, roughness: 0.35 });
+  const leather = new THREE.MeshStandardMaterial({ color: 0x3a2618, roughness: 0.85 });
+  const wrapMat = new THREE.MeshStandardMaterial({ color: 0x22160e, roughness: 0.9 });
+  // blade: a tapering profile with a point, extruded with bevels so the edges catch the light
+  const shape = new THREE.Shape();
+  shape.moveTo(-0.024, 0); shape.lineTo(-0.0225, 0.62); shape.quadraticCurveTo(-0.019, 0.86, 0, 0.97); shape.quadraticCurveTo(0.019, 0.86, 0.0225, 0.62); shape.lineTo(0.024, 0); shape.closePath();
+  const bladeGeo = new THREE.ExtrudeGeometry(shape, { depth: 0.002, bevelEnabled: true, bevelThickness: 0.0034, bevelSize: 0.0055, bevelSegments: 3, curveSegments: 16 });
+  bladeGeo.translate(0, 0, -0.001);
+  const blade = new THREE.Mesh(bladeGeo, steel); blade.position.y = 0.112; swordModel.add(blade);
+  const fuller = new THREE.Mesh(new RoundedBoxGeometry(0.009, 0.62, 0.0095, 2, 0.003), darkSteel); fuller.position.y = 0.112 + 0.34; swordModel.add(fuller);
+  const ricasso = new THREE.Mesh(new RoundedBoxGeometry(0.052, 0.03, 0.012, 2, 0.004), darkSteel); ricasso.position.y = 0.118; swordModel.add(ricasso);
+  const guard = new THREE.Mesh(new RoundedBoxGeometry(0.2, 0.026, 0.034, 3, 0.009), guardMetal); guard.position.y = 0.094; swordModel.add(guard);
+  for (const x of [-0.104, 0.104]) { const end = new THREE.Mesh(new THREE.SphereGeometry(0.017, 16, 12), guardMetal); end.position.set(x, 0.098, 0); swordModel.add(end); }
+  const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.0155, 0.0175, 0.165, 18), leather); grip.position.y = 0.0; swordModel.add(grip);
+  for (let i = 0; i < 7; i++) { const w = new THREE.Mesh(new THREE.TorusGeometry(0.0172, 0.003, 6, 18), wrapMat); w.rotation.x = Math.PI / 2; w.rotation.y = 0.35; w.position.y = -0.068 + i * 0.022; swordModel.add(w); }
+  const pommel = new THREE.Mesh(new THREE.SphereGeometry(0.027, 20, 16), guardMetal); pommel.position.y = -0.1; pommel.scale.y = 0.85; swordModel.add(pommel);
+  swordModel.traverse(o => { if (o.isMesh) { o.castShadow = false; o.renderOrder = 5; } });
+}
+// drop a real sword model at models/sword.glb and it's used instead (longest axis becomes the blade)
+new GLTFLoader().load("models/sword.glb", g => {
+  const m = g.scene, box = new THREE.Box3().setFromObject(m), size = box.getSize(V());
+  const axis = size.x > size.y && size.x > size.z ? "x" : size.z > size.y ? "z" : "y";
+  const holder = new THREE.Group(); holder.add(m);
+  if (axis === "x") m.rotation.z = Math.PI / 2; else if (axis === "z") m.rotation.x = Math.PI / 2;
+  holder.updateMatrixWorld(true);
+  const b2 = new THREE.Box3().setFromObject(holder), s2 = b2.getSize(V());
+  holder.scale.setScalar(1.08 / Math.max(s2.x, s2.y, s2.z));
+  holder.updateMatrixWorld(true);
+  const b3 = new THREE.Box3().setFromObject(holder);
+  holder.position.y = -0.12 - b3.min.y; holder.position.x = -(b3.min.x + b3.max.x) / 2; holder.position.z = -(b3.min.z + b3.max.z) / 2;
+  swordModel.clear(); swordModel.add(holder);
+}, undefined, () => {});
+
 const flashTex = (() => {
   const c = document.createElement("canvas"); c.width = c.height = 128; const g = c.getContext("2d"); g.translate(64, 64);
   for (let i = 0; i < 6; i++) { g.rotate(Math.PI / 3 + rand(-0.25, 0.25)); const gr = g.createLinearGradient(0, 0, 0, -58); gr.addColorStop(0, "rgba(255,236,190,1)"); gr.addColorStop(1, "rgba(255,150,50,0)"); g.fillStyle = gr; g.beginPath(); g.moveTo(-6, 0); g.lineTo(0, -rand(36, 58)); g.lineTo(6, 0); g.fill(); }
@@ -744,13 +796,106 @@ class Soldier {
     this.mixer = new THREE.AnimationMixer(this.root);
     this.mixer.clipAction(MODEL.animations.find(a => a.name === "Idle")).play();
     this.mixer.update(rand(0, 2));
-    this.state = "idle"; this.hp = 100;
+    this.state = "idle"; this.hp = 100; this.id = "s" + Math.random().toString(36).slice(2, 7) + ":";
     this.wounds = []; this.parts = {}; this.joints = {}; this.bleed = [];
     soldiers.push(this);
   }
   boneWorld(n) { return this.bones[n].getWorldPosition(V()); }
 
   // ---------------------------------------------------------- hits
+  // nearest body part to a point and how far outside its surface the point is (works before and after he goes ragdoll)
+  probe(point) {
+    let best = null;
+    for (const sg of SEGS) {
+      let a, b, r = sg.r || sg.w[0];
+      if (this.state === "ragdoll") {
+        const part = this.parts[sg.n];
+        a = toV(part.body.position); b = a.clone().add(part.axis.clone().applyQuaternion(toQ(part.body.quaternion)).multiplyScalar(part.len));
+      } else {
+        a = this.boneWorld(sg.a); b = this.bones[sg.b] ? this.boneWorld(sg.b) : a.clone().add(new THREE.Vector3(0, 0.22, 0));
+      }
+      if (sg.n === "chest" || sg.n === "pelvis") r += 0.03; // the armour is bulky
+      const ab = b.clone().sub(a), t = THREE.MathUtils.clamp(point.clone().sub(a).dot(ab) / Math.max(ab.lengthSq(), 1e-6), 0, 1);
+      const d = a.addScaledVector(ab, t).distanceTo(point) - r;
+      if (!best || d < best.d) best = { name: sg.n, d };
+    }
+    return best;
+  }
+  bladeHit(point, dir, kind, partName, power) {
+    const normal = dir.clone().negate();
+    this.hit(point, normal, dir);
+    const part = this.parts[partName];
+    // a blade shoves the part it meets far harder than a bullet does
+    const imp = dir.clone().multiplyScalar((kind === "stab" ? 22 : 14) * power);
+    part.body.applyImpulse(new CANNON.Vec3(imp.x, imp.y * 0.6, imp.z), new CANNON.Vec3(point.x - part.body.position.x, point.y - part.body.position.y, point.z - part.body.position.z));
+    if (kind === "stab") { Sound.stab(point); this.hp -= 30; return; }
+    Sound.slice(point);
+    // slashes take limbs and heads off once they've taken enough
+    this.limbHp = this.limbHp || { head: 55, uArmL: 45, uArmR: 45, lArmL: 35, lArmR: 35, uLegL: 75, uLegR: 75, lLegL: 55, lLegR: 55 };
+    const target = partName === "chest" && this.neckHit(point, dir) ? "head" : partName;
+    if (!(target in this.limbHp)) return;
+    this.limbHp[target] -= 24 * power + 10;
+    if (this.limbHp[target] <= 0) this.sever(target, dir);
+  }
+  // cut a part (and everything below it) off at its joint
+  sever(name, dir) {
+    const joint = this.joints[name];
+    if (!joint || joint.severed) return;
+    joint.severed = true;
+    world.removeConstraint(joint);
+    this.severedParts = this.severedParts || new Set();
+    this.severedParts.add(name);
+    const seg = SEGS.find(sg => sg.n === name), part = this.parts[name], parent = this.parts[seg.p];
+    const rootBone = this.bones[seg.a];
+    this.cutRoots = this.cutRoots || [];
+    this.cutRoots.push({ bone: rootBone, part });
+    // remove the triangles that straddle the cut, so the skin doesn't stretch between the body and the piece
+    const sub = new Set(); rootBone.traverse(o => { if (o.isBone) sub.add(o); });
+    this.root.traverse(o => {
+      if (!o.isSkinnedMesh) return;
+      if (!o.userData.ownGeo) { o.geometry = o.geometry.clone(); o.userData.ownGeo = true; }
+      const g = o.geometry, si = g.attributes.skinIndex, sw2 = g.attributes.skinWeight;
+      const inSub = o.skeleton.bones.map(b => sub.has(b));
+      const side = new Uint8Array(si.count);
+      for (let v = 0; v < si.count; v++) {
+        let w = 0;
+        const ix = [si.getX(v), si.getY(v), si.getZ(v), si.getW(v)], wt = [sw2.getX(v), sw2.getY(v), sw2.getZ(v), sw2.getW(v)];
+        for (let c = 0; c < 4; c++) if (inSub[ix[c]]) w += wt[c];
+        side[v] = w > 0.5 ? 1 : 0;
+        // bind every vertex wholly to its own side, so nothing stretches across the gap
+        const to = o.skeleton.bones.indexOf(side[v] ? rootBone : rootBone.parent);
+        if (w > 0.001 && w < 0.999 && to >= 0) { si.setXYZW(v, to, 0, 0, 0); sw2.setXYZW(v, 1, 0, 0, 0); }
+      }
+      si.needsUpdate = true; sw2.needsUpdate = true;
+      if (!g.index) { const n = g.attributes.position.count, idx = new Uint32Array(n); for (let i = 0; i < n; i++) idx[i] = i; g.setIndex(new THREE.BufferAttribute(idx, 1)); }
+      const src = g.index.array, keep = [];
+      for (let i = 0; i < src.length; i += 3) { const a = side[src[i]], b = side[src[i + 1]], c = side[src[i + 2]]; if (a === b && b === c) keep.push(src[i], src[i + 1], src[i + 2]); }
+      g.setIndex(keep);
+    });
+    // stumps: a cap on each side of the cut
+    const pivot = toV(part.body.position);
+    const out = part.axis.clone().applyQuaternion(toQ(part.body.quaternion)).normalize(); // from the joint into the severed part
+    const capMat = new THREE.MeshStandardMaterial({ color: BLOOD ? 0x6a1212 : 0x2c2826, roughness: 0.7, side: THREE.DoubleSide });
+    const boneMat = new THREE.MeshStandardMaterial({ color: BLOOD ? 0xe8dfcc : 0x5c5852, roughness: 0.6 });
+    const r = { head: 0.065, uArmL: 0.06, uArmR: 0.06, lArmL: 0.048, lArmR: 0.048, uLegL: 0.085, uLegR: 0.085, lLegL: 0.065, lLegR: 0.065 }[name] || 0.06;
+    for (const [holder, normal] of [[parent.group, out], [part.group, out.clone().negate()]]) {
+      holder.updateMatrixWorld(true);
+      const cap = new THREE.Mesh(new THREE.CircleGeometry(r, 16), capMat);
+      cap.position.copy(pivot).addScaledVector(normal, 0.004); cap.lookAt(pivot.clone().add(normal));
+      const stub = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.22, r * 0.22, 0.03, 8), boneMat);
+      stub.position.copy(pivot).addScaledVector(normal, 0.01); stub.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
+      holder.attach(cap); holder.attach(stub);
+    }
+    // the piece flies off the way the blade was going
+    if (dir) { const v = dir.clone().multiplyScalar(2.2).add(new THREE.Vector3(0, 1.2, 0)); part.body.velocity.x += v.x; part.body.velocity.y += v.y; part.body.velocity.z += v.z; part.body.angularVelocity.set(rand(-8, 8), rand(-8, 8), rand(-8, 8)); }
+    Sound.sever(pivot);
+    if (BLOOD) { spray(pivot, out, 70, 3, 0.8); spray(pivot, out.clone().negate(), 50, 2.2, 0.8); pixelGibs(pivot, out, 8); this.bleed.push({ obj: (() => { const o = new THREE.Object3D(); parent.group.updateMatrixWorld(true); o.position.copy(parent.group.worldToLocal(pivot.clone())); o.quaternion.copy(parent.group.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(new THREE.Quaternion().setFromUnitVectors(UPV, out))); parent.group.add(o); return o; })(), t: 0, dur: 12, rate: 90, artery: true }); }
+    // losing a head or a leg ends the fight; an arm he can stagger on with
+    if (name === "head" || /Leg/.test(name)) { if (this.balance) this.endBalance(); this.tone = name === "head" ? 0.2 : 0.6; this.hp = -999; }
+    else { this.limpArms = this.limpArms || new Set(); this.limpArms.add(name.slice(-1)); this.hands = (this.hands || []).filter(h => h !== name.slice(-1)); }
+    for (const k in this.parts) this.parts[k].body.wakeUp();
+    this.frozen = false;
+  }
   // which part of him the bullet went into: head, neck, chest, gut, an arm or a leg (and which side)
   bodyRegion(point, dir) {
     if (this.neckHit(point, dir)) return { mode: "neck" };
@@ -1172,7 +1317,7 @@ class Soldier {
     for (const s of SEGS) {
       if (!s.p) continue;
       const c = this.joints[s.n], part = this.parts[s.n], A = this.parts[s.p].body, B = part.body;
-      if (B.sleepState === CANNON.Body.SLEEPING) continue;
+      if (c.severed || B.sleepState === CANNON.Body.SLEEPING) continue;
       const rel = A.quaternion.inverse().mult(B.quaternion);
       const d = c.rest.inverse().mult(rel);                       // change since the hit, in the part's own frame
       const a = part.axis;
@@ -1198,7 +1343,7 @@ class Soldier {
     this.tone = Math.max(0, this.tone - dt / 2.5);
     const k = Math.min(1, this.tone * dt * 14);
     for (const s of SEGS) {
-      if (!s.p) continue;
+      if (!s.p || this.joints[s.n].severed) continue;
       const A = this.parts[s.p].body, B = this.parts[s.n].body;
       B.angularVelocity.x += (A.angularVelocity.x - B.angularVelocity.x) * k;
       B.angularVelocity.y += (A.angularVelocity.y - B.angularVelocity.y) * k;
@@ -1271,6 +1416,10 @@ class Soldier {
     const hips = this.bones.Hips, pel = this.parts.pelvis.body;
     hips.parent.updateMatrixWorld(true);
     hips.position.copy(hips.parent.worldToLocal(toV(pel.interpolatedPosition)));
+    if (this.cutRoots && this.cutRoots.length) {
+      this.root.updateMatrixWorld(true);
+      for (const { bone, part } of this.cutRoots) { bone.parent.updateMatrixWorld(true); bone.position.copy(bone.parent.worldToLocal(toV(part.body.interpolatedPosition))); }
+    }
   }
   bleedTick(dt) {
     for (const b of this.bleed) {
@@ -1382,13 +1531,34 @@ document.addEventListener("mousemove", e => {
   player.yaw -= e.movementX * s; player.pitch = THREE.MathUtils.clamp(player.pitch - e.movementY * s, -1.45, 1.45);
   md.x += e.movementX; md.y += e.movementY;
 });
-document.addEventListener("mousedown", e => { if (!locked) return; if (e.button === 0) shoot(); if (e.button === 2) aiming = true; });
+let weapon = "pistol";
+const sw = { kind: null, t: 0, dir: 1, hitParts: new Set(), prev: [], recover: 0 };
+function setWeapon(w) {
+  if (weapon === w || gs.reloading) return;
+  weapon = w;
+  gun.visible = w === "pistol"; sword.visible = w === "sword";
+  document.getElementById("ammo").style.visibility = w === "pistol" ? "visible" : "hidden";
+  sw.kind = null; aiming = false;
+}
+function swordAttack(kind) {
+  if (sw.kind && sw.t < (sw.kind === "slash" ? 0.3 : 0.38)) return;
+  sw.kind = kind; sw.t = 0; sw.hitParts.clear(); sw.prev = []; sw.clanged = false;
+  if (kind === "slash") sw.dir = -sw.dir; // alternate directions
+  setTimeout(() => Sound.whoosh(kind === "slash" ? 1 : 0.7), kind === "slash" ? 80 : 110);
+}
+document.addEventListener("mousedown", e => {
+  if (!locked) return;
+  if (weapon === "sword") { if (e.button === 0) swordAttack("slash"); if (e.button === 2) swordAttack("stab"); return; }
+  if (e.button === 0) shoot(); if (e.button === 2) aiming = true;
+});
 document.addEventListener("mouseup", e => { if (e.button === 2) aiming = false; });
 document.addEventListener("contextmenu", e => e.preventDefault());
 document.addEventListener("keydown", e => {
   keys[e.code] = true;
   if (!locked) return;
-  if (e.code === "KeyR") reload();
+  if (e.code === "KeyR" && weapon === "pistol") reload();
+  if (e.code === "Digit1") setWeapon("pistol");
+  if (e.code === "Digit2") setWeapon("sword");
   if (e.code === "KeyE") spawnTarget();
   if (e.code === "KeyQ") slowmo = !slowmo;
   if (e.code === "Space" && player.onGround) { player.vel.y = 4.2; player.onGround = false; }
@@ -1452,6 +1622,64 @@ function shoot() {
     bulletHole(behind.point, bn, 0.03);
   }
   hitEl.style.opacity = 1; hitT = 0.12;
+}
+
+// sword poses in camera space; the blade runs along the sword's local +Y
+const ease = x => x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2;
+function updateSword(realDt, dt, moving, sprint) {
+  const bob = Math.min(1, moving / 4);
+  let px = 0.27 + gs.swayX + Math.cos(gs.bob) * 0.012 * bob, py = -0.3 + gs.swayY + Math.abs(Math.sin(gs.bob)) * 0.014 * bob - (sprint ? 0.03 : 0), pz = -0.48;
+  let ry = 0.15, rx = -0.75, rz = -0.35; // resting: blade up and forward, a little canted
+  let active = false;
+  if (sw.kind) {
+    sw.t += dt;
+    if (sw.kind === "slash") {
+      const T = 0.46, u = sw.t / T, d = sw.dir;
+      // wind up (0-.22), cut across (.22-.5), follow through and recover
+      const wind = THREE.MathUtils.smoothstep(u, 0, 0.22), cut = ease(THREE.MathUtils.clamp((u - 0.22) / 0.28, 0, 1)), back = THREE.MathUtils.smoothstep(u, 0.6, 1);
+      const a = THREE.MathUtils.lerp(d * 1.45 * wind, -d * 1.25, cut);
+      px = THREE.MathUtils.lerp(px, 0.32 * Math.sign(a || 1) * 0.6 + 0.05, (wind + cut) * 0.6 * (1 - back)) ; py = THREE.MathUtils.lerp(py, -0.17 - cut * 0.12, (1 - back));
+      pz = THREE.MathUtils.lerp(pz, -0.5, 1 - back);
+      ry = THREE.MathUtils.lerp(ry, a, 1 - back); rx = THREE.MathUtils.lerp(rx, -1.32, 1 - back); rz = THREE.MathUtils.lerp(rz, d * 0.55 + (cut - 0.5) * -d * 0.5, 1 - back);
+      active = u > 0.22 && u < 0.52;
+      if (u >= 1) sw.kind = null;
+    } else {
+      const T = 0.5, u = sw.t / T;
+      const pull = THREE.MathUtils.smoothstep(u, 0, 0.25), thrust = ease(THREE.MathUtils.clamp((u - 0.25) / 0.17, 0, 1)), back = THREE.MathUtils.smoothstep(u, 0.55, 1);
+      const k = 1 - back;
+      px = THREE.MathUtils.lerp(px, 0.1, k); py = THREE.MathUtils.lerp(py, -0.2, k);
+      pz = THREE.MathUtils.lerp(pz, -0.35 + pull * 0.12 - thrust * 0.62, k);
+      ry = THREE.MathUtils.lerp(ry, 0.04, k); rx = THREE.MathUtils.lerp(rx, -1.55, k); rz = THREE.MathUtils.lerp(rz, -1.57, k); // flat blade, point first
+      active = u > 0.25 && u < 0.5;
+      if (u >= 1) sw.kind = null;
+    }
+  }
+  sword.position.set(px, py, pz);
+  sword.rotation.order = "YXZ"; sword.rotation.set(rx, ry, rz);
+  sword.updateMatrixWorld(true);
+  // blade sample points, swept from last frame so a fast cut can't skip past him
+  const pts = [];
+  for (let i = 0; i <= 6; i++) pts.push(sword.localToWorld(new THREE.Vector3(0, 0.16 + i * 0.145, 0)));
+  if (active && sw.prev.length) {
+    for (let i = 0; i < pts.length; i++) {
+      const vel = pts[i].clone().sub(sw.prev[i]).divideScalar(Math.max(realDt, 1e-3));
+      for (const f of [0.5, 1]) {
+        const p = sw.prev[i].clone().lerp(pts[i], f);
+        // the blade stops on walls and crates
+        const ph = !sw.clanged && propHit(p, sw.prev[i]);
+        if (ph) { sw.clanged = true; Sound.clang(ph.point); dust(ph.point, 1, 0xc9c3b8); bulletHole(ph.point, ph.normal, 0.025); sw.t = Math.max(sw.t, sw.kind === "slash" ? 0.3 : 0.32); break; }
+        for (const s of soldiers) {
+          const probe = s.probe(p);
+          if (!probe || probe.d > 0.035 || sw.hitParts.has(s.id + probe.name)) continue;
+          sw.hitParts.add(s.id + probe.name);
+          const dir = sw.kind === "stab" ? V().set(0, 0, -1).applyQuaternion(camera.quaternion) : vel.clone().normalize();
+          s.bladeHit(p, dir, sw.kind, probe.name, Math.min(1.6, vel.length() / 6));
+          hitEl.style.opacity = 1; hitT = 0.12;
+        }
+      }
+    }
+  }
+  sw.prev = pts;
 }
 
 function spawnTarget() {
@@ -1520,6 +1748,7 @@ function update(realDt) {
   }
   slide.position.z = gs.slide * 0.034;
   gun.position.copy(gp); gun.rotation.set(rx, gs.swayX * 2, rz);
+  if (weapon === "sword") updateSword(realDt, dt, moving, sprint);
   document.getElementById("dot").style.opacity = 1 - gs.ads;
   if (flash.visible) { flash.userData.t -= realDt; muzzle.getWorldPosition(flash.position); if (flash.userData.t <= 0) flash.visible = false; }
   flashLight.intensity *= Math.exp(-realDt * 45);
@@ -1620,7 +1849,7 @@ new GLTFLoader().load("models/Soldier.glb", g => {
 loop();
 
 // testing hooks
-window.__game = { player, soldiers, camera, shoot: () => { gs.cd = 0; shoot(); }, update, render, spawnTarget };
+window.__game = { setWeapon: w => setWeapon(w), swordAttack: k => swordAttack(k), player, soldiers, camera, shoot: () => { gs.cd = 0; shoot(); }, update, render, spawnTarget };
 </script>
 </body>
 </html>
