@@ -13,6 +13,7 @@
 local SETTINGS = {
 	Scale = 1,            -- 1.5 = bigger dragon (speeds, camera and effects scale with it)
 	ModelName = "Dragon",
+	Theme = "Crimson",    -- Crimson, Frost (ice breath), Shadow (void breath), Emerald (poison breath), Gold
 	AutoMount = true,     -- put the player on the dragon as soon as they spawn
 
 	-- SOUND IDS: paste real ids here, e.g. "rbxassetid://1234567890".
@@ -26,6 +27,8 @@ local SETTINGS = {
 		DragonFootstep = "",
 		DragonWingFlap = "",
 		DragonLand = "",
+		DragonFireball = "",
+		DragonExplosion = "",
 	},
 
 	-- built-in particle textures that ship with Roblox (no uploads needed)
@@ -86,6 +89,31 @@ return {
 	FirePitch = 12,              -- degrees the stream angles down toward the ground
 	FireDamagePerSecond = 35,
 	FireConeDegrees = 14,
+
+	-- fireball (G)
+	FireballCooldown = 1.4,
+	FireballSpeed = 170 * S,
+	FireballRadius = 18 * S,
+	FireballDamage = 45,
+
+	-- dive slam: land hard after a dive (Ctrl in the air)
+	SlamMinSpeed = 45 * S,
+	SlamRadius = 28 * S,
+	SlamDamage = 35,
+
+	-- stamina: running, fast flight, climbing and attacks use it
+	StaminaMax = 100,
+	StaminaRegen = 22,
+	FireStaminaCost = 20,
+	FireballStaminaCost = 15,
+
+	-- burning ground left by the breath
+	GroundFireTime = 7,
+	MaxGroundFires = 16,
+
+	BreathColors = {
+__BREATH__
+	},
 
 	-- roar
 	RoarTime = 2.4,
@@ -164,6 +192,33 @@ function Animator.new(model, config, assets)
 	end
 	self.Mouth = find("Mouth")
 	self.Beam = find("FireBeam")
+	self.BeamCore = find("FireBeamCore")
+	self.Wind = find("WindStreaks")
+	self.Lids = {}
+	self.Nostrils = {}
+	for _, d in ipairs(model:GetDescendants()) do
+		if d.Name == "LidL" or d.Name == "LidR" then
+			table.insert(self.Lids, d)
+		elseif d.Name == "NostrilSmoke" then
+			table.insert(self.Nostrils, d)
+		end
+	end
+
+	-- a soft shadow under the dragon while it flies (made locally on each client)
+	local shadow = Instance.new("Part")
+	shadow.Name = "DragonShadow"
+	shadow.Shape = Enum.PartType.Cylinder
+	shadow.Color = Color3.new(0, 0, 0)
+	shadow.Material = Enum.Material.SmoothPlastic
+	shadow.Transparency = 1
+	shadow.Anchored = true
+	shadow.CanCollide = false
+	shadow.CanQuery = false
+	shadow.CanTouch = false
+	shadow.CastShadow = false
+	shadow.Size = Vector3.new(0.1, 10, 10)
+	shadow.Parent = Workspace
+	self.ShadowPart = shadow
 	self.Impact = find("FireImpact")
 	self.ImpactLight = find("ImpactLight")
 	self.MouthGlow = find("MouthGlow")
@@ -218,6 +273,9 @@ function Animator.new(model, config, assets)
 	self.LegPhase = {}
 	self.FilterTimer = 0
 	self.ImpactHit = false
+	self.Snap = 0
+	self.NextBlink = 2
+	self.BlinkUntil = 0
 	return self
 end
 
@@ -318,8 +376,18 @@ function Animator:Land(speed)
 	local power = math.clamp(speed / (70 * self.Scale), 0.2, 1)
 	self:Emit("LandDust", math.floor(20 + 50 * power))
 	self:Play("DragonLand")
-	self:Ring(self.Root.Position - Vector3.new(0, self.Config.RestHeight - 0.3, 0), 55 * power * self.Scale)
+	local ground = self.Root.Position - Vector3.new(0, self.Config.RestHeight - 0.3, 0)
+	self:Ring(ground, 55 * power * self.Scale)
 	self.Shake = math.max(self.Shake, 0.15 + 0.6 * power)
+	-- a dive slam throws a second, wider ring and a flash of dust
+	if speed >= (self.Config.SlamMinSpeed or math.huge) then
+		task.delay(0.08, function()
+			self:Ring(ground, 95 * self.Scale)
+		end)
+		self:Emit("LandDust", 60)
+		self.Shake = 1.2
+		self.FovKick = math.max(self.FovKick, 0.8)
+	end
 end
 
 function Animator:WingBeat(height)
@@ -346,6 +414,27 @@ function Animator:RoarBlast()
 		}):Play()
 		Debris:AddItem(shell, 1)
 	end
+	local ringTemplate = self.Assets and self.Assets:FindFirstChild("RoarRing")
+	if ringTemplate and self.Mouth then
+		for i = 0, 2 do
+			task.delay(i * 0.18, function()
+				if not self.Mouth.Parent then
+					return
+				end
+				local start = self.Mouth.WorldCFrame * CFrame.Angles(0, 0, math.pi / 2)
+				local ring = ringTemplate:Clone()
+				ring.CFrame = start
+				ring.Size = Vector3.new(0.3, 3 * self.Scale, 3 * self.Scale)
+				ring.Parent = Workspace
+				TweenService:Create(ring, TweenInfo.new(0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+					Size = Vector3.new(0.15, 45 * self.Scale, 45 * self.Scale),
+					CFrame = start + self.Mouth.WorldCFrame.UpVector * 40 * self.Scale,
+					Transparency = 1,
+				}):Play()
+				Debris:AddItem(ring, 1)
+			end)
+		end
+	end
 end
 
 function Animator:OnAction(new, old)
@@ -353,6 +442,9 @@ function Animator:OnAction(new, old)
 		self:Stop("DragonFire")
 		self:Stop("DragonFireImpact")
 		self:Emit("FireSmoke", 14)
+		for _, smoke in ipairs(self.Nostrils) do
+			smoke:Emit(10)
+		end
 	end
 	if new == "Charge" then
 		self:Play("DragonFireCharge")
@@ -360,6 +452,11 @@ function Animator:OnAction(new, old)
 		self:Play("DragonFire")
 		self:Emit("FireCore", 25)
 		self.FovKick = math.max(self.FovKick, 0.3)
+	elseif new == "Fireball" then
+		self:Play("DragonFireball")
+		self:Emit("FireCore", 30)
+		self:Emit("FireEmbers", 25)
+		self.Shake = math.max(self.Shake, 0.35)
 	elseif new == "Roar" then
 		self:Play("DragonRoar")
 		task.delay(0.35, function()
@@ -475,6 +572,7 @@ function Animator:Update(dt)
 	end
 	self.RoarRear = approach(self.RoarRear, rear, 12, dt)
 	self.RoarOut = approach(self.RoarOut, out, 10, dt)
+	self.Snap = approach(self.Snap, action == "Fireball" and 1 or 0, 14, dt)
 
 	local breath = math.sin(t * 1.7)
 	local stepBob = math.abs(math.sin(self.Gait * TAU))
@@ -487,7 +585,7 @@ function Animator:Update(dt)
 
 	-- neck and head
 	local neckPitch = math.sin(t * 0.8) * 0.035 * (1 - self.Fire) - stepBob * 0.03 * self.Move - 0.08 * self.Air
-		+ 0.08 * self.Charge - 0.12 * self.Fire + 0.12 * self.RoarRear + 0.16 * self.RoarOut
+		+ 0.08 * self.Charge - 0.12 * self.Fire + 0.12 * self.RoarRear + 0.16 * self.RoarOut - 0.07 * self.Snap
 	local neckYaw = math.clamp(self.YawRate * 0.1, -0.1, 0.1)
 		+ math.sin(t * 0.45) * 0.05 * (1 - self.Move) * (1 - self.Fire)
 		+ math.sin(t * 1.6) * 0.04 * self.Fire
@@ -501,7 +599,7 @@ function Animator:Update(dt)
 	local headRoll = math.sin(t * 31) * 0.035 * self.RoarOut
 	self:Set("Head", CFrame.Angles(headPitch, headYaw, headRoll))
 
-	local jaw = 0.05 + math.max(0, breath) * 0.03 + self.Charge * 0.2 + self.Fire * 0.95 + self.RoarRear * 0.25 + self.RoarOut
+	local jaw = 0.05 + math.max(0, breath) * 0.03 + self.Charge * 0.2 + self.Fire * 0.95 + self.RoarRear * 0.25 + self.RoarOut + self.Snap * 0.8
 	self:Set("Jaw", CFrame.Angles(-math.min(jaw, 1.1) * 0.6, 0, 0))
 
 	-- tail: a travelling wave that grows toward the tip and swings out of turns
@@ -575,6 +673,40 @@ function Animator:Update(dt)
 		self.MouthLight.Brightness = self.Charge * 6 + self.Fire * 5 + self.Roar * 2
 	end
 
+	-- blinking (not while it's breathing fire or roaring)
+	if t >= self.NextBlink and intensity < 0.2 then
+		self.BlinkUntil = t + 0.13
+		self.NextBlink = t + 2.5 + math.random() * 4
+	end
+	local closed = t < self.BlinkUntil
+	for _, lid in ipairs(self.Lids) do
+		local want = closed and 0 or 1
+		if lid.Transparency ~= want then
+			lid.Transparency = want
+		end
+	end
+
+	-- wind streaks in fast flight
+	if self.Wind then
+		local windy = self.Air > 0.6 and planar > (cfg.FlySpeed or 60) * 0.9
+		if self.Wind.Enabled ~= windy then
+			self.Wind.Enabled = windy
+		end
+	end
+
+	-- a shadow on the ground that shrinks and fades as the dragon climbs
+	local shadow = self.ShadowPart
+	if shadow then
+		if self.Air > 0.05 and height < 400 then
+			local size = math.max(6, 24 - math.min(height, 200) * 0.09) * S
+			shadow.Size = Vector3.new(0.1, size, size)
+			shadow.CFrame = CFrame.new(pos - Vector3.new(0, height - 0.08, 0)) * CFrame.Angles(0, math.atan2(-look.X, -look.Z), 0) * CFrame.Angles(0, 0, math.pi / 2)
+			shadow.Transparency = 1 - (0.45 - math.clamp(height / 300, 0, 0.35)) * self.Air
+		elseif shadow.Transparency ~= 1 then
+			shadow.Transparency = 1
+		end
+	end
+
 	-- fire breath
 	local charging = action == "Charge"
 	local firing = action == "Fire"
@@ -587,6 +719,9 @@ function Animator:Update(dt)
 		self.Beam.Enabled = self.Fire > 0.05
 		self.Beam.Width0 = 1.5 * S * self.Fire
 		self.Beam.Width1 = 8 * S * self.Fire
+	end
+	if self.BeamCore then
+		self.BeamCore.Enabled = self.Fire > 0.05
 	end
 	if self.Fire > 0.02 or self.ImpactHit then
 		self:UpdateImpact(firing)
@@ -608,6 +743,9 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local PhysicsService = game:GetService("PhysicsService")
 local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local Debris = game:GetService("Debris")
 
 local system = ReplicatedStorage:WaitForChild("DragonSystem")
 local Config = require(system:WaitForChild("Config"))
@@ -642,8 +780,19 @@ local function refreshFilter()
 	params.FilterDescendantsInstances = list
 end
 
+local effects = Workspace:FindFirstChild("DragonEffects") or Instance.new("Folder")
+effects.Name = "DragonEffects"
+effects.Parent = Workspace
+local BREATH = Config.BreathColors
+local FIRE_TEXTURE = "rbxasset://textures/particles/fire_main.dds"
+local SMOKE_TEXTURE = "rbxasset://textures/particles/smoke_main.dds"
+
 local driver = nil
 local busy = false
+local fireballReady = 0
+local slamReady = 0
+local groundFires = {}
+local lastGroundFire = 0
 local fireHeld = false
 local cooldownUntil = 0
 local settleToken = nil
@@ -747,6 +896,231 @@ local function dismount()
 	end)
 end
 
+-- a frame on a surface whose -Z points out along the normal (safe for straight-up normals)
+local function surfaceCF(position, normal)
+	local reference = math.abs(normal.Y) > 0.9 and Vector3.zAxis or Vector3.yAxis
+	return CFrame.lookAt(position, position + normal, reference)
+end
+
+-- fireballs hit players too, just not the dragon or its rider
+local hitParams = RaycastParams.new()
+hitParams.FilterType = Enum.RaycastFilterType.Exclude
+
+local function anchoredPart(name, size, cf)
+	local part = Instance.new("Part")
+	part.Name = name
+	part.Size = size
+	part.CFrame = cf
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanQuery = false
+	part.CanTouch = false
+	part.CastShadow = false
+	part.Transparency = 1
+	return part
+end
+
+local function flames(parent, name, rate, size, lifetime, speed)
+	local e = Instance.new("ParticleEmitter")
+	e.Name = name
+	e.Texture = FIRE_TEXTURE
+	e.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, BREATH.Core),
+		ColorSequenceKeypoint.new(0.45, BREATH.Mid),
+		ColorSequenceKeypoint.new(1, BREATH.Outer),
+	})
+	e.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, size * 0.4), NumberSequenceKeypoint.new(0.4, size), NumberSequenceKeypoint.new(1, 0) })
+	e.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.4), NumberSequenceKeypoint.new(0.5, 0.2), NumberSequenceKeypoint.new(1, 1) })
+	e.Lifetime = NumberRange.new(lifetime * 0.7, lifetime)
+	e.Rate = rate
+	e.Speed = NumberRange.new(speed * 0.5, speed)
+	e.SpreadAngle = Vector2.new(25, 25)
+	e.Rotation = NumberRange.new(0, 360)
+	e.RotSpeed = NumberRange.new(-90, 90)
+	e.Acceleration = Vector3.new(0, speed, 0)
+	e.LightEmission = 1
+	e.LightInfluence = 0
+	e.Parent = parent
+	return e
+end
+
+-- the breath leaves the ground burning for a few seconds, and a scorch mark that slowly fades
+local function groundFire(position, normal)
+	if os.clock() - lastGroundFire < 0.3 then
+		return
+	end
+	lastGroundFire = os.clock()
+	local up = normal.Magnitude > 0 and normal or Vector3.yAxis
+	local holder = anchoredPart("GroundFire", Vector3.one, surfaceCF(position, up) * CFrame.Angles(-math.pi / 2, 0, 0))
+	local point = Instance.new("Attachment")
+	point.Parent = holder
+	local fire = flames(point, "Flames", 18, 4 * S, 0.9, 8 * S)
+	local smoke = Instance.new("ParticleEmitter")
+	smoke.Texture = SMOKE_TEXTURE
+	smoke.Color = ColorSequence.new(BREATH.Smoke)
+	smoke.Size = NumberSequence.new(3 * S, 9 * S)
+	smoke.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.3, 0.6), NumberSequenceKeypoint.new(1, 1) })
+	smoke.Lifetime = NumberRange.new(2, 3)
+	smoke.Rate = 4
+	smoke.Speed = NumberRange.new(4 * S, 7 * S)
+	smoke.Parent = point
+	local light = Instance.new("PointLight")
+	light.Color = BREATH.Mid
+	light.Range = 14 * S
+	light.Brightness = 2
+	light.Parent = holder
+	holder.Parent = effects
+
+	local scorch = anchoredPart("Scorch", Vector3.new(0.05, 7 * S, 7 * S), surfaceCF(position, up) * CFrame.new(0, 0, -0.03) * CFrame.Angles(0, math.pi / 2, 0))
+	scorch.Shape = Enum.PartType.Cylinder
+	scorch.Color = BREATH.Smoke:Lerp(Color3.new(0, 0, 0), 0.75)
+	scorch.Material = Enum.Material.Slate
+	scorch.Transparency = 0.25
+	scorch.Parent = effects
+
+	table.insert(groundFires, holder)
+	while #groundFires > Config.MaxGroundFires do
+		local oldest = table.remove(groundFires, 1)
+		if oldest.Parent then
+			oldest:Destroy()
+		end
+	end
+	task.delay(Config.GroundFireTime, function()
+		fire.Enabled = false
+		smoke.Enabled = false
+		if light.Parent then
+			TweenService:Create(light, TweenInfo.new(1), { Brightness = 0 }):Play()
+		end
+	end)
+	Debris:AddItem(holder, Config.GroundFireTime + 3)
+	TweenService:Create(scorch, TweenInfo.new(6, Enum.EasingStyle.Linear, Enum.EasingDirection.In, 0, false, 8), { Transparency = 1 }):Play()
+	Debris:AddItem(scorch, 15)
+end
+
+local function blast(position, radius, damage)
+	for _, model in ipairs(Workspace:GetChildren()) do
+		if model:IsA("Model") and model ~= dragon and not (driver and model == driver.Character) then
+			local humanoid = model:FindFirstChildOfClass("Humanoid")
+			local target = model.PrimaryPart or model:FindFirstChild("HumanoidRootPart")
+			if humanoid and target and humanoid.Health > 0 then
+				local distance = (target.Position - position).Magnitude
+				if distance < radius then
+					humanoid:TakeDamage(damage * (1 - distance / radius * 0.6))
+				end
+			end
+		end
+	end
+	-- loose parts get thrown outward
+	local overlap = OverlapParams.new()
+	overlap.FilterType = Enum.RaycastFilterType.Exclude
+	overlap.FilterDescendantsInstances = { dragon, effects }
+	for _, part in ipairs(Workspace:GetPartBoundsInRadius(position, radius, overlap)) do
+		if not part.Anchored and part.Parent and not part.Parent:FindFirstChildOfClass("Humanoid") then
+			local away = part.Position - position
+			if away.Magnitude > 0.01 then
+				pcall(function()
+					part:ApplyImpulse((away.Unit + Vector3.new(0, 0.6, 0)) * part.AssemblyMass * 70)
+				end)
+			end
+		end
+	end
+end
+
+local function explode(position, normal)
+	local flash = anchoredPart("FireballBlast", Vector3.one, CFrame.new(position))
+	local point = Instance.new("Attachment")
+	point.Parent = flash
+	local burst = flames(point, "Burst", 0, 9 * S, 0.8, 40 * S)
+	burst.SpreadAngle = Vector2.new(180, 180)
+	local light = Instance.new("PointLight")
+	light.Color = BREATH.Mid
+	light.Range = 45 * S
+	light.Brightness = 6
+	light.Parent = flash
+	local explosion = Instance.new("Explosion")
+	explosion.Position = position
+	explosion.BlastRadius = Config.FireballRadius
+	explosion.BlastPressure = 0
+	explosion.DestroyJointRadiusPercent = 0
+	explosion.Parent = flash
+	local id = Config.Sounds and Config.Sounds.DragonExplosion
+	if id and id ~= "" then
+		local boom = Instance.new("Sound")
+		boom.SoundId = id
+		boom.Volume = 1
+		boom.RollOffMaxDistance = 600 * S
+		boom.Parent = flash
+		boom:Play()
+	end
+	flash.Parent = effects
+	burst:Emit(60)
+	TweenService:Create(light, TweenInfo.new(0.8), { Brightness = 0 }):Play()
+	Debris:AddItem(flash, 3)
+	blast(position, Config.FireballRadius, Config.FireballDamage)
+	groundFire(position, normal or Vector3.yAxis)
+end
+
+local function launchFireball()
+	hitParams.FilterDescendantsInstances = { dragon, effects, driver and driver.Character or nil }
+	local mouthPoint = root.CFrame:PointToWorldSpace(Vector3.new(0, 10, -30) * S)
+	local velocity = (root.CFrame * CFrame.Angles(-math.rad(3), 0, 0)).LookVector * Config.FireballSpeed
+	local ball = anchoredPart("Fireball", Vector3.one * 3 * S, CFrame.new(mouthPoint))
+	ball.Shape = Enum.PartType.Ball
+	ball.Material = Enum.Material.Neon
+	ball.Color = BREATH.Mid
+	ball.Transparency = 0.1
+	local point = Instance.new("Attachment")
+	point.Parent = ball
+	flames(point, "Trail", 70, 3.5 * S, 0.5, 4 * S)
+	local light = Instance.new("PointLight")
+	light.Color = BREATH.Mid
+	light.Range = 20 * S
+	light.Brightness = 3
+	light.Parent = ball
+	ball.Parent = effects
+
+	local travelled = 0
+	local connection
+	connection = RunService.Heartbeat:Connect(function(dt)
+		velocity += Vector3.new(0, -12 * S * dt, 0)
+		local step = velocity * dt
+		local result = Workspace:Raycast(ball.Position, step, hitParams)
+		travelled += step.Magnitude
+		if result or travelled > 450 * S or not ball.Parent then
+			connection:Disconnect()
+			local at = result and result.Position or ball.Position
+			ball:Destroy()
+			explode(at, result and result.Normal)
+			return
+		end
+		ball.CFrame = ball.CFrame + step
+	end)
+end
+
+local function fireball()
+	if busy or os.clock() < fireballReady then
+		return
+	end
+	fireballReady = os.clock() + Config.FireballCooldown
+	setAction("Fireball")
+	task.delay(0.15, launchFireball)
+	task.delay(0.4, function()
+		if dragon:GetAttribute("Action") == "Fireball" then
+			setAction("")
+		end
+	end)
+end
+
+local function slam(power)
+	if os.clock() < slamReady then
+		return
+	end
+	slamReady = os.clock() + 1
+	power = math.clamp(tonumber(power) or 0, 0, 1)
+	local ground = root.Position - Vector3.new(0, Config.RestHeight, 0)
+	blast(ground, Config.SlamRadius, Config.SlamDamage * power)
+end
+
 local function damageTick(dt)
 	-- where the animated mouth sits while breathing fire (the server doesn't run the animation)
 	local origin = root.CFrame:PointToWorldSpace(Vector3.new(0, 4, -30) * S)
@@ -765,6 +1139,11 @@ local function damageTick(dt)
 			end
 		end
 	end
+	-- where the stream lands, the ground keeps burning
+	local result = Workspace:Raycast(origin, direction * Config.FireRange, params)
+	if result then
+		groundFire(result.Position, result.Normal)
+	end
 end
 
 local function startFire()
@@ -779,6 +1158,7 @@ local function startFire()
 		local elapsed = 0
 		if driver then
 			setAction("Fire")
+			refreshFilter()
 			while dragon.Parent and driver and elapsed < Config.FireMaxTime and (fireHeld or elapsed < Config.FireMinTime) do
 				local dt = task.wait(0.1)
 				elapsed += dt
@@ -829,6 +1209,10 @@ remote.OnServerEvent:Connect(function(player, kind, value)
 		end
 	elseif kind == "Roar" then
 		roar()
+	elseif kind == "Fireball" then
+		fireball()
+	elseif kind == "Slam" then
+		slam(value)
 	end
 end)
 
@@ -913,7 +1297,7 @@ gui.Parent = player:WaitForChild("PlayerGui")
 local hint = Instance.new("TextLabel")
 hint.AnchorPoint = Vector2.new(0.5, 1)
 hint.Position = UDim2.new(0.5, 0, 1, -18)
-hint.Size = UDim2.fromOffset(760, 30)
+hint.Size = UDim2.fromOffset(880, 30)
 hint.BackgroundColor3 = Color3.fromRGB(15, 10, 12)
 hint.BackgroundTransparency = 0.35
 hint.TextColor3 = Color3.fromRGB(255, 225, 190)
@@ -925,6 +1309,44 @@ local corner = Instance.new("UICorner")
 corner.CornerRadius = UDim.new(0, 8)
 corner.Parent = hint
 
+-- stamina bar
+local staminaBack = Instance.new("Frame")
+staminaBack.AnchorPoint = Vector2.new(0.5, 1)
+staminaBack.Position = UDim2.new(0.5, 0, 1, -58)
+staminaBack.Size = UDim2.fromOffset(300, 10)
+staminaBack.BackgroundColor3 = Color3.fromRGB(20, 14, 16)
+staminaBack.BackgroundTransparency = 0.25
+staminaBack.Visible = false
+staminaBack.Parent = gui
+local backCorner = Instance.new("UICorner")
+backCorner.CornerRadius = UDim.new(1, 0)
+backCorner.Parent = staminaBack
+local backStroke = Instance.new("UIStroke")
+backStroke.Color = Color3.fromRGB(255, 255, 255)
+backStroke.Transparency = 0.8
+backStroke.Parent = staminaBack
+local staminaFill = Instance.new("Frame")
+staminaFill.Size = UDim2.fromScale(1, 1)
+staminaFill.BackgroundColor3 = Color3.new(1, 1, 1)
+staminaFill.Parent = staminaBack
+local fillCorner = Instance.new("UICorner")
+fillCorner.CornerRadius = UDim.new(1, 0)
+fillCorner.Parent = staminaFill
+local fillGradient = Instance.new("UIGradient")
+fillGradient.Color = ColorSequence.new(Config.BreathColors.Core, Config.BreathColors.Mid)
+fillGradient.Parent = staminaFill
+local staminaLabel = Instance.new("TextLabel")
+staminaLabel.AnchorPoint = Vector2.new(0.5, 1)
+staminaLabel.Position = UDim2.new(0.5, 0, 0, -3)
+staminaLabel.Size = UDim2.fromOffset(300, 14)
+staminaLabel.BackgroundTransparency = 1
+staminaLabel.Text = "STAMINA"
+staminaLabel.TextColor3 = Color3.fromRGB(255, 230, 200)
+staminaLabel.TextTransparency = 0.3
+staminaLabel.Font = Enum.Font.GothamBold
+staminaLabel.TextSize = 11
+staminaLabel.Parent = staminaBack
+
 ------------------------------------------------------------------------
 -- state
 
@@ -934,6 +1356,9 @@ local spaceHeld = false
 local spaceTime = 0
 local jumpQueued = false
 local baseFov = camera.FieldOfView
+local stamina = Config.StaminaMax
+local exhausted = false
+local restTimer = 0
 
 local state = {
 	Pos = root.Position,
@@ -1061,7 +1486,15 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		return
 	end
 	if key == Enum.KeyCode.F then
-		remote:FireServer("Fire", true)
+		if stamina >= Config.FireStaminaCost and not exhausted then
+			remote:FireServer("Fire", true)
+		end
+	elseif key == Enum.KeyCode.G then
+		if stamina >= Config.FireballStaminaCost and not exhausted and (dragon:GetAttribute("Action") or "") == "" then
+			stamina -= Config.FireballStaminaCost
+			restTimer = 0.8
+			remote:FireServer("Fireball")
+		end
 	elseif key == Enum.KeyCode.R then
 		remote:FireServer("Roar")
 	elseif input.UserInputType == Enum.UserInputType.MouseButton2 then
@@ -1112,7 +1545,7 @@ local function drive(dt)
 	local K = Enum.KeyCode
 	local throttle = (down(K.W, K.Up) and 1 or 0) - (down(K.S, K.Down) and 1 or 0)
 	local turn = (down(K.A, K.Left) and 1 or 0) - (down(K.D, K.Right) and 1 or 0)
-	local running = down(K.LeftShift, K.RightShift)
+	local running = down(K.LeftShift, K.RightShift) and not exhausted
 	local diving = down(K.LeftControl, K.Q)
 	local action = dragon:GetAttribute("Action") or ""
 	local busy = action ~= ""
@@ -1203,6 +1636,9 @@ local function drive(dt)
 		end
 		state.Pos += Vector3.new(0, state.Vy * dt, 0)
 		if standY and state.Pos.Y <= standY and state.Vy <= 0 then
+			if -state.Vy >= Config.SlamMinSpeed then
+				remote:FireServer("Slam", math.clamp(-state.Vy / (Config.DiveSpeed * 1.1), 0, 1))
+			end
 			state.Pos = Vector3.new(state.Pos.X, standY, state.Pos.Z)
 			state.Airborne = false
 			state.Flying = false
@@ -1215,6 +1651,37 @@ local function drive(dt)
 		end
 	end
 	jumpQueued = false
+
+	-- stamina: running, fast flight, climbing and fire breath drain it; resting refills it
+	local drain = 0
+	if running and math.abs(state.Speed) > Config.WalkSpeed * 1.1 then
+		drain += state.Airborne and 14 or 16
+	end
+	if state.Airborne and spaceHeld and state.Flying then
+		drain += 9
+	end
+	if action == "Fire" then
+		drain += 14
+	end
+	if drain > 0 then
+		stamina = math.max(0, stamina - drain * dt)
+		restTimer = 0.8
+	else
+		restTimer -= dt
+		if restTimer <= 0 then
+			stamina = math.min(Config.StaminaMax, stamina + Config.StaminaRegen * dt)
+		end
+	end
+	if stamina <= 0 and not exhausted then
+		exhausted = true
+		if action == "Fire" or action == "Charge" then
+			remote:FireServer("Fire", false)
+		end
+	elseif exhausted and stamina >= Config.StaminaMax * 0.3 then
+		exhausted = false
+	end
+	staminaFill.Size = UDim2.fromScale(stamina / Config.StaminaMax, 1)
+	staminaFill.BackgroundTransparency = exhausted and 0.5 or 0
 
 	-- tilt with the slope on the ground, pitch and bank in the air
 	local targetPitch, targetRoll = 0, 0
@@ -1261,7 +1728,9 @@ local function cameraStep(dt)
 		end
 		local focus = rootCf.Position + Vector3.new(0, Config.CameraHeight, 0)
 		local rotation = CFrame.Angles(0, dragonYaw + cam.Yaw, 0) * CFrame.Angles(cam.Pitch, 0, 0)
-		local desired = focus + rotation:VectorToWorldSpace(Vector3.new(0, 0, cam.Dist))
+		local speedFactor = math.clamp(math.abs(state.Speed) / Config.FlyFastSpeed, 0, 1)
+		cam.Pull = approach(cam.Pull or 0, speedFactor * 0.35 + anim.Roar * 0.18, 2.5, dt)
+		local desired = focus + rotation:VectorToWorldSpace(Vector3.new(0, 0, cam.Dist * (1 + cam.Pull)))
 		local hit = Workspace:Raycast(focus, desired - focus, params)
 		if hit then
 			desired = hit.Position + hit.Normal * 2
@@ -1285,8 +1754,9 @@ local function cameraStep(dt)
 end
 
 local function updateHint()
+	staminaBack.Visible = driving
 	if driving then
-		hint.Text = "WASD move  |  Shift run  |  Space jump / hold to fly  |  Ctrl dive  |  F fire  |  R roar  |  Right mouse camera  |  E dismount"
+		hint.Text = "WASD move  |  Shift run  |  Space jump / hold to fly  |  Ctrl dive (slam)  |  F fire  |  G fireball  |  R roar  |  Right mouse camera  |  E dismount"
 		hint.Visible = true
 	elseif not seat.Occupant and player.Character and player.Character:FindFirstChild("HumanoidRootPart")
 		and (player.Character.HumanoidRootPart.Position - root.Position).Magnitude < 60 * S then
@@ -1331,24 +1801,46 @@ local ok, err = pcall(function()
 	local MAT = Enum.Material
 	local TEX = SETTINGS.Textures
 
+	local THEMES = {
+		Crimson = { Body = { 122, 22, 32 }, Dark = { 74, 12, 22 }, Scale = { 100, 17, 27 }, Belly = { 214, 142, 72 }, BellyDark = { 176, 104, 52 }, Membrane = { 96, 16, 28 }, Eye = { 255, 186, 40 }, Horn = { 44, 34, 36 }, Breath = "Fire" },
+		Frost = { Body = { 74, 124, 176 }, Dark = { 40, 72, 114 }, Scale = { 60, 104, 152 }, Belly = { 204, 230, 246 }, BellyDark = { 160, 196, 222 }, Membrane = { 62, 100, 146 }, Eye = { 120, 232, 255 }, Horn = { 214, 230, 242 }, Breath = "Ice" },
+		Shadow = { Body = { 36, 28, 48 }, Dark = { 18, 14, 26 }, Scale = { 48, 34, 64 }, Belly = { 112, 62, 152 }, BellyDark = { 82, 42, 112 }, Membrane = { 42, 22, 62 }, Eye = { 206, 96, 255 }, Horn = { 22, 18, 26 }, Breath = "Void" },
+		Emerald = { Body = { 36, 112, 60 }, Dark = { 18, 64, 34 }, Scale = { 28, 92, 48 }, Belly = { 198, 212, 112 }, BellyDark = { 150, 170, 80 }, Membrane = { 26, 82, 44 }, Eye = { 196, 255, 80 }, Horn = { 42, 36, 30 }, Breath = "Poison" },
+		Gold = { Body = { 198, 152, 50 }, Dark = { 132, 94, 26 }, Scale = { 172, 126, 38 }, Belly = { 250, 228, 164 }, BellyDark = { 222, 192, 122 }, Membrane = { 152, 92, 32 }, Eye = { 255, 92, 40 }, Horn = { 62, 42, 30 }, Breath = "Fire" },
+	}
+	local BREATHS = {
+		Fire = { Core = { 255, 244, 190 }, Mid = { 255, 156, 46 }, Outer = { 222, 64, 22 }, Smoke = { 70, 56, 50 } },
+		Ice = { Core = { 240, 252, 255 }, Mid = { 140, 222, 255 }, Outer = { 60, 140, 232 }, Smoke = { 196, 218, 236 } },
+		Void = { Core = { 250, 222, 255 }, Mid = { 192, 82, 255 }, Outer = { 92, 22, 164 }, Smoke = { 42, 22, 62 } },
+		Poison = { Core = { 240, 255, 200 }, Mid = { 152, 240, 62 }, Outer = { 52, 152, 42 }, Smoke = { 62, 92, 42 } },
+	}
+	local theme = THEMES[SETTINGS.Theme] or THEMES.Crimson
+	local breath = BREATHS[theme.Breath] or BREATHS.Fire
+	local function rgb(t)
+		return Color3.fromRGB(t[1], t[2], t[3])
+	end
+	local BLACK = Color3.new(0, 0, 0)
+	local B = { Core = rgb(breath.Core), Mid = rgb(breath.Mid), Outer = rgb(breath.Outer), Smoke = rgb(breath.Smoke) }
+	B.Ash = B.Outer:Lerp(BLACK, 0.7)
+
 	local C = {
-		Body = Color3.fromRGB(122, 22, 32),
-		BodyDark = Color3.fromRGB(74, 12, 22),
-		Scale = Color3.fromRGB(100, 17, 27),
-		Belly = Color3.fromRGB(214, 142, 72),
-		BellyDark = Color3.fromRGB(176, 104, 52),
-		Horn = Color3.fromRGB(44, 34, 36),
+		Body = rgb(theme.Body),
+		BodyDark = rgb(theme.Dark),
+		Scale = rgb(theme.Scale),
+		Belly = rgb(theme.Belly),
+		BellyDark = rgb(theme.BellyDark),
+		Horn = rgb(theme.Horn),
 		HornTip = Color3.fromRGB(214, 200, 172),
-		Spike = Color3.fromRGB(34, 24, 28),
-		Membrane = Color3.fromRGB(96, 16, 28),
-		Eye = Color3.fromRGB(255, 186, 40),
+		Spike = rgb(theme.Dark):Lerp(BLACK, 0.5),
+		Membrane = rgb(theme.Membrane),
+		Eye = rgb(theme.Eye),
 		Mouth = Color3.fromRGB(110, 18, 22),
 		Tongue = Color3.fromRGB(176, 46, 56),
 		Tooth = Color3.fromRGB(242, 234, 212),
 		Claw = Color3.fromRGB(28, 24, 26),
 		Leather = Color3.fromRGB(78, 46, 28),
 		Gold = Color3.fromRGB(212, 168, 70),
-		Fire = Color3.fromRGB(255, 140, 40),
+		Fire = B.Mid,
 	}
 
 	--------------------------------------------------------------------
@@ -1618,12 +2110,29 @@ local ok, err = pcall(function()
 	for _, side in ipairs({ -1, 1 }) do
 		local tag = side < 0 and "L" or "R"
 		weld(blob("Nostril", v3(0.55, 0.45, 0.6), at(hp(side * 0.75, 0.75, -9.25)), C.Spike), head)
+		local nostril = attachment("NostrilPoint", head, at(hp(side * 0.75, 0.95, -9.3)))
+		make("ParticleEmitter", "NostrilSmoke", nostril, {
+			Texture = TEX.Smoke,
+			Color = ColorSequence.new(B.Smoke:Lerp(Color3.new(1, 1, 1), 0.3)),
+			Size = NS(0, 0.35 * S, 1, 2.2 * S),
+			Transparency = NS(0, 0.6, 1, 1),
+			Lifetime = NumberRange.new(1.2, 1.8),
+			Rate = 2,
+			Speed = NumberRange.new(1.5 * S, 3 * S),
+			SpreadAngle = Vector2.new(20, 20),
+			Rotation = NumberRange.new(0, 360),
+			Acceleration = v3(0, 1.5 * S, 0),
+			Enabled = true,
+		})
 		weld(blob("Brow", v3(1.6, 0.9, 3.0), at(hp(side * 1.9, 1.95, -3.0)) * CFrame.Angles(0, side * 0.25, side * -0.2), C.BodyDark), head)
 		weld(blob("Cheek", v3(1.2, 2.2, 3), at(hp(side * 2.3, -0.3, -1.2)), C.BodyDark), head)
 
 		local eye = blob("Eye" .. tag, v3(0.8, 0.75, 1.3), at(hp(side * 2.15, 1.2, -3.4)), C.Eye, MAT.Neon)
 		weld(eye, head)
 		make("PointLight", "EyeLight", eye, { Color = C.Eye, Range = 7 * S, Brightness = 1.5, Shadows = false })
+		local lid = blob("Lid" .. tag, v3(0.95, 0.9, 1.45), at(hp(side * 2.17, 1.22, -3.4)), C.BodyDark)
+		lid.Transparency = 1
+		weld(lid, head)
 		weld(newPart("Pupil", v3(0.12, 0.6, 0.18) * S, at(hp(side * 2.55, 1.2, -3.4)), Color3.new(0, 0, 0)), head)
 
 		-- big swept horns and a smaller pair beneath them
@@ -1802,7 +2311,7 @@ local ok, err = pcall(function()
 	-- fire breath, all from the mouth attachment (emitting along its +Y, out of the mouth)
 	make("ParticleEmitter", "FireFlame", mouth, {
 		Texture = TEX.Fire,
-		Color = CS(0, Color3.fromRGB(255, 244, 190), 0.25, Color3.fromRGB(255, 166, 50), 0.6, Color3.fromRGB(222, 64, 22), 1, Color3.fromRGB(70, 22, 12)),
+		Color = CS(0, B.Core, 0.25, B.Mid, 0.6, B.Outer, 1, B.Ash),
 		Size = NS(0, 1.2 * S, 0.3, 5 * S, 1, 9.5 * S),
 		Transparency = NS(0, 0.45, 0.12, 0.05, 0.7, 0.35, 1, 1),
 		Lifetime = NumberRange.new(0.5, 0.75),
@@ -1820,7 +2329,7 @@ local ok, err = pcall(function()
 	})
 	make("ParticleEmitter", "FireCore", mouth, {
 		Texture = TEX.Fire,
-		Color = CS(0, Color3.fromRGB(255, 255, 240), 0.5, Color3.fromRGB(255, 226, 120), 1, Color3.fromRGB(255, 150, 40)),
+		Color = CS(0, Color3.new(1, 1, 1), 0.5, B.Core, 1, B.Mid),
 		Size = NS(0, 0.6 * S, 0.4, 2.2 * S, 1, 3 * S),
 		Transparency = NS(0, 0.1, 0.6, 0.4, 1, 1),
 		Lifetime = NumberRange.new(0.3, 0.4),
@@ -1835,7 +2344,7 @@ local ok, err = pcall(function()
 	})
 	make("ParticleEmitter", "FireSmoke", mouth, {
 		Texture = TEX.Smoke,
-		Color = CS(0, Color3.fromRGB(70, 56, 50), 1, Color3.fromRGB(28, 26, 26)),
+		Color = CS(0, B.Smoke, 1, B.Smoke:Lerp(BLACK, 0.6)),
 		Size = NS(0, 3 * S, 1, 15 * S),
 		Transparency = NS(0, 1, 0.2, 0.55, 1, 1),
 		Lifetime = NumberRange.new(1.6, 2.4),
@@ -1851,7 +2360,7 @@ local ok, err = pcall(function()
 	})
 	make("ParticleEmitter", "FireEmbers", mouth, {
 		Texture = TEX.Spark,
-		Color = ColorSequence.new(Color3.fromRGB(255, 200, 90), Color3.fromRGB(255, 90, 20)),
+		Color = ColorSequence.new(B.Core, B.Outer),
 		Size = NS(0, 0.3 * S, 1, 0),
 		Lifetime = NumberRange.new(1, 1.8),
 		Rate = 60,
@@ -1865,7 +2374,7 @@ local ok, err = pcall(function()
 	})
 	make("ParticleEmitter", "FireSparks", mouth, {
 		Texture = TEX.Spark,
-		Color = ColorSequence.new(Color3.fromRGB(255, 240, 180)),
+		Color = ColorSequence.new(B.Core),
 		Size = NS(0, 0.18 * S, 1, 0),
 		Lifetime = NumberRange.new(0.3, 0.5),
 		Rate = 70,
@@ -1878,7 +2387,7 @@ local ok, err = pcall(function()
 	})
 	make("ParticleEmitter", "ChargeGlow", mouth, {
 		Texture = TEX.Spark,
-		Color = ColorSequence.new(Color3.fromRGB(255, 210, 120), C.Fire),
+		Color = ColorSequence.new(B.Core, B.Mid),
 		Size = NS(0, 2.5 * S, 1, 0),
 		Transparency = NS(0, 0.3, 1, 1),
 		Lifetime = NumberRange.new(0.25, 0.35),
@@ -1892,7 +2401,7 @@ local ok, err = pcall(function()
 	-- charge: sparks drawn inward from a sphere around the mouth
 	make("ParticleEmitter", "ChargeSuck", chargeCore, {
 		Texture = TEX.Spark,
-		Color = ColorSequence.new(Color3.fromRGB(255, 230, 150), C.Fire),
+		Color = ColorSequence.new(B.Core, B.Mid),
 		Size = NS(0, 0.45 * S, 1, 0),
 		Lifetime = NumberRange.new(0.35, 0.45),
 		Rate = 90,
@@ -1925,7 +2434,7 @@ local ok, err = pcall(function()
 	local impactPoint = attachment("ImpactPoint", impact, impact.CFrame)
 	make("ParticleEmitter", "ImpactFlame", impactPoint, {
 		Texture = TEX.Fire,
-		Color = CS(0, Color3.fromRGB(255, 230, 160), 0.4, Color3.fromRGB(255, 120, 30), 1, Color3.fromRGB(90, 30, 10)),
+		Color = CS(0, B.Core, 0.4, B.Mid, 1, B.Ash),
 		Size = NS(0, 3 * S, 0.5, 7 * S, 1, 2 * S),
 		Transparency = NS(0, 0.3, 0.7, 0.4, 1, 1),
 		Lifetime = NumberRange.new(0.5, 0.85),
@@ -1941,7 +2450,7 @@ local ok, err = pcall(function()
 	})
 	make("ParticleEmitter", "ImpactSmoke", impactPoint, {
 		Texture = TEX.Smoke,
-		Color = CS(0, Color3.fromRGB(60, 48, 42), 1, Color3.fromRGB(25, 24, 24)),
+		Color = CS(0, B.Smoke, 1, B.Smoke:Lerp(BLACK, 0.6)),
 		Size = NS(0, 5 * S, 1, 18 * S),
 		Transparency = NS(0, 1, 0.25, 0.5, 1, 1),
 		Lifetime = NumberRange.new(2, 3),
@@ -1955,7 +2464,7 @@ local ok, err = pcall(function()
 	})
 	make("ParticleEmitter", "ImpactSparks", impactPoint, {
 		Texture = TEX.Spark,
-		Color = ColorSequence.new(Color3.fromRGB(255, 230, 150), Color3.fromRGB(255, 110, 20)),
+		Color = ColorSequence.new(B.Core, B.Outer),
 		Size = NS(0, 0.3 * S, 1, 0),
 		Lifetime = NumberRange.new(0.5, 1),
 		Rate = 80,
@@ -1975,13 +2484,43 @@ local ok, err = pcall(function()
 		Texture = TEX.Fire,
 		TextureMode = Enum.TextureMode.Stretch,
 		TextureSpeed = 1.6,
-		Color = CS(0, Color3.fromRGB(255, 240, 180), 0.5, Color3.fromRGB(255, 140, 40), 1, Color3.fromRGB(200, 50, 20)),
+		Color = CS(0, B.Core, 0.5, B.Mid, 1, B.Outer),
 		Transparency = NS(0, 0.2, 0.6, 0.55, 1, 1),
 		Width0 = 1.5 * S,
 		Width1 = 8 * S,
 		Segments = 12,
 		FaceCamera = true,
 		LightEmission = 1,
+		LightInfluence = 0,
+		Enabled = false,
+	})
+
+	make("Beam", "FireBeamCore", head, {
+		Attachment0 = mouth,
+		Attachment1 = impactPoint,
+		Color = ColorSequence.new(Color3.new(1, 1, 1), B.Core),
+		Transparency = NS(0, 0.05, 0.5, 0.5, 1, 1),
+		Width0 = 0.5 * S,
+		Width1 = 2.5 * S,
+		Segments = 8,
+		FaceCamera = true,
+		LightEmission = 1,
+		LightInfluence = 0,
+		Enabled = false,
+	})
+
+	-- fast-flight wind streaks around the body
+	make("ParticleEmitter", "WindStreaks", root, {
+		Texture = TEX.Spark,
+		Color = ColorSequence.new(Color3.new(1, 1, 1)),
+		Size = NS(0, 0.15 * S, 1, 0),
+		Transparency = NS(0, 0.4, 1, 1),
+		Lifetime = NumberRange.new(0.25, 0.4),
+		Rate = 140,
+		Speed = NumberRange.new(1, 3),
+		Shape = Enum.ParticleEmitterShape.Box,
+		ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume,
+		LightEmission = 0.6,
 		LightInfluence = 0,
 		Enabled = false,
 	})
@@ -2040,6 +2579,7 @@ local ok, err = pcall(function()
 	sound("DragonFootstep", body, { Volume = 0.7 })
 	sound("DragonWingFlap", body, { Volume = 0.8 })
 	sound("DragonLand", body, { Volume = 1 })
+	sound("DragonFireball", head, { Volume = 0.9 })
 
 	--------------------------------------------------------------------
 	log("Creating fire system...")
@@ -2080,15 +2620,29 @@ local ok, err = pcall(function()
 	dustRing.CanTouch = false
 	dustRing.CastShadow = false
 	dustRing.Parent = assets
+	local roarRing = dustRing:Clone()
+	roarRing.Name = "RoarRing"
+	roarRing.Material = MAT.Neon
+	roarRing.Color = C.Eye:Lerp(Color3.new(1, 1, 1), 0.5)
+	roarRing.Transparency = 0.55
+	roarRing.Parent = assets
 
 	local soundLines = {}
-	for _, name in ipairs({ "DragonRoar", "DragonFireCharge", "DragonFire", "DragonFireImpact", "DragonFootstep", "DragonWingFlap", "DragonLand" }) do
+	for _, name in ipairs({ "DragonRoar", "DragonFireCharge", "DragonFire", "DragonFireImpact", "DragonFootstep", "DragonWingFlap", "DragonLand", "DragonFireball", "DragonExplosion" }) do
 		table.insert(soundLines, string.format("\t\t%s = %q,", name, SETTINGS.Sounds[name] or ""))
 	end
 	local configSource = CONFIG_SOURCE
 	configSource = configSource:gsub("__SCALE__", tostring(S))
 	configSource = configSource:gsub("__NAME__", modelName)
 	configSource = configSource:gsub("__AUTOMOUNT__", tostring(SETTINGS.AutoMount))
+	local breathLines = {}
+	for _, key in ipairs({ "Core", "Mid", "Outer", "Smoke" }) do
+		local c = breath[key]
+		table.insert(breathLines, string.format("\t\t%s = Color3.fromRGB(%d, %d, %d),", key, c[1], c[2], c[3]))
+	end
+	configSource = configSource:gsub("__BREATH__", function()
+		return table.concat(breathLines, "\n")
+	end)
 	configSource = configSource:gsub("__SOUNDS__", function()
 		return table.concat(soundLines, "\n")
 	end)
