@@ -391,8 +391,8 @@ function ejectShell() {
 
 // ================================================================ the soldier
 const SEGS = [
-  { n: "pelvis", a: "Hips", b: "Spine", w: [0.15, 0.1], m: 10 },
-  { n: "chest", a: "Spine", b: "Neck", w: [0.17, 0.11], m: 16, p: "pelvis", ang: 0.45, tw: 0.3 },
+  { n: "pelvis", a: "Hips", b: "Spine", w: [0.17, 0.12], m: 10 },
+  { n: "chest", a: "Spine", b: "Neck", w: [0.2, 0.13], m: 16, p: "pelvis", ang: 0.45, tw: 0.3 },
   { n: "head", a: "Head", b: "HeadTop_End", r: 0.11, m: 5, p: "chest", ang: 0.55, tw: 0.5 },
   { n: "uArmL", a: "LeftArm", b: "LeftForeArm", w: [0.05, 0.05], m: 2.5, p: "chest", ang: 1.3, tw: 0.25 },
   { n: "lArmL", a: "LeftForeArm", b: "LeftHand", ext: 0.1, w: [0.045, 0.045], m: 2.2, p: "uArmL", ang: 0.75, tw: 0.1 },
@@ -519,7 +519,9 @@ class Soldier {
       const axis = pb.clone().sub(pa).normalize().applyQuaternion(qa.clone().invert()); // toward the child, in the bone's frame
       if (s.ext) len += s.ext;
       const arm = /Arm/.test(s.n);
-      const body = new CANNON.Body({ mass: s.m, material: fleshMat, linearDamping: arm ? 0.3 : 0.12, angularDamping: arm ? 0.85 : 0.7, collisionFilterGroup: 2, collisionFilterMask: 1, allowSleep: true });
+      // groups: 1 ground, 2 torso/head, 4 arms, 8 legs. arms touch everything; legs touch each other and the torso
+      const group = arm ? 4 : /Leg/.test(s.n) ? 8 : 2;
+      const body = new CANNON.Body({ mass: s.m, material: fleshMat, linearDamping: arm ? 0.3 : 0.12, angularDamping: arm ? 0.85 : 0.7, collisionFilterGroup: group, collisionFilterMask: 1 | 2 | 4 | 8, allowSleep: true });
       body.sleepSpeedLimit = 0.25; body.sleepTimeLimit = 0.6;
       const shapeQ = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis);
       const shape = s.r ? new CANNON.Sphere(s.r) : new CANNON.Box(new CANNON.Vec3(s.w[0], Math.max(len / 2, 0.04), s.w[1]));
@@ -529,9 +531,9 @@ class Soldier {
       body.quaternion.set(qa.x, qa.y, qa.z, qa.w);
       body.addEventListener("collide", e => this.onContact(body, e));
       world.addBody(body);
-      const group = new THREE.Group(); scene.add(group);
-      group.position.copy(pa); group.quaternion.copy(qa);
-      this.parts[s.n] = { def: s, body, group, axis, len, half: len / 2 };
+      const holder = new THREE.Group(); scene.add(holder);
+      holder.position.copy(pa); holder.quaternion.copy(qa);
+      this.parts[s.n] = { def: s, body, group: holder, axis, len, half: len / 2 };
     }
     // nothing may start inside the floor
     let lowest = Infinity;
