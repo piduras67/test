@@ -742,9 +742,10 @@ class Soldier {
     if (!first && (mode === "chest" || mode === "gut" || mode === "neck") && !B.persistent) { B.dur = Math.max(B.t + 0.5, B.dur - 0.9); return; } // more hits, sooner down
     if (mode === "fall") { B.persistent = false; B.mode = "chest"; B.t = 0.2; B.dur = 1.6; B.noWalk = true; return; }
     B.mode = mode;
-    B.persistent = mode === "arm" || mode === "leg";
-    if (mode === "leg") { B.kneelSide = R.side; B.drift.multiplyScalar(0.45); }
-    if (mode === "arm") B.drift.multiplyScalar(0.35);
+    // arm and leg hits take him down too: a leg gives out fast, an arm hangs dead as he falls
+    B.persistent = false;
+    if (mode === "leg") { B.dur = rand(1.4, 1.9); B.drift.multiplyScalar(0.5); }
+    if (mode === "arm") { B.dur = rand(2.2, 2.8); B.drift.multiplyScalar(0.7); }
     if (mode === "gut") { B.dur = rand(3.4, 4); B.drift.multiplyScalar(0.55); }
     if (!first) { B.t = 0.15; B.faded = false; }
     // who holds what
@@ -795,7 +796,7 @@ class Soldier {
     for (const [n, f] of [["Spine", 0.3], ["Spine1", 0.35], ["Spine2", 0.35]]) P[n].rotateX(curl * f);
     P.Neck.rotateX((mode === "gut" ? 0.15 : 0.25) + 0.2 * buckle);
     let drop = 0.24 * buckle;
-    if (mode === "leg") {
+    if (false) { // (kneeling removed: he falls instead)
       // down on one knee: the shot leg's knee goes to the ground, the other foot stays planted
       const kneel = THREE.MathUtils.smoothstep(B.t, 0.25, 1.0);
       const hurt = B.kneelSide === "L" ? "Left" : "Right", good = hurt === "Left" ? "Right" : "Left";
