@@ -224,7 +224,7 @@ const Sound = (() => {
 const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) });
 world.broadphase = new CANNON.SAPBroadphase(world);
 world.allowSleep = true;
-world.solver.iterations = 16;
+world.solver.iterations = 30;
 const groundMat = new CANNON.Material("ground"), fleshMat = new CANNON.Material("flesh");
 world.addContactMaterial(new CANNON.ContactMaterial(groundMat, fleshMat, { friction: 0.7, restitution: 0.02 }));
 const ground = new CANNON.Body({ mass: 0, material: groundMat, shape: new CANNON.Plane() });
@@ -242,6 +242,7 @@ scene.add(dropMesh);
 const drops = Array.from({ length: MAX_DROPS }, () => ({ on: false, p: V(), v: V(), r: 0, life: 0 }));
 let dropCursor = 0;
 const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
+const UPV = new THREE.Vector3(0, 1, 0);
 for (let i = 0; i < MAX_DROPS; i++) dropMesh.setMatrixAt(i, ZERO);
 function drop(pos, vel, r) {
   const d = drops[dropCursor]; dropCursor = (dropCursor + 1) % MAX_DROPS;
@@ -255,45 +256,51 @@ function spray(pos, dir, n, speed, spread, rMin = 0.004, rMax = 0.014) {
   }
 }
 
-// puddles: irregular, slightly domed blobs with real thickness and a wet clearcoat
-function blobGeometry(seed) {
-  const shape = new THREE.Shape(), n = 28;
+// on the ground: soft-edged wet splats (textured), and smooth glossy pools that spread under the body
+function splatTexture() {
+  const c = document.createElement("canvas"); c.width = c.height = 256; const g = c.getContext("2d");
+  const cx = 128, cy = 128;
+  const main = g.createRadialGradient(cx, cy, 6, cx, cy, 64);
+  main.addColorStop(0, "rgba(58,2,2,1)"); main.addColorStop(0.7, "rgba(86,4,4,0.95)"); main.addColorStop(1, "rgba(96,6,6,0)");
+  g.fillStyle = main; g.beginPath(); g.arc(cx, cy, rand(34, 58), 0, 7); g.fill();
+  for (let i = 0; i < 22; i++) {
+    const a = rand(0, 7), d = rand(28, 110), r = rand(1.5, 9);
+    g.fillStyle = `rgba(${rand(60, 100) | 0},3,3,${rand(0.75, 1)})`;
+    g.beginPath(); g.arc(cx + Math.cos(a) * d, cy + Math.sin(a) * d, r, 0, 7); g.fill();
+    if (Math.random() < 0.4) { g.strokeStyle = g.fillStyle; g.lineWidth = r * 0.6; g.beginPath(); g.moveTo(cx + Math.cos(a) * d * 0.55, cy + Math.sin(a) * d * 0.55); g.lineTo(cx + Math.cos(a) * d, cy + Math.sin(a) * d); g.stroke(); }
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t;
+}
+const splatMats = [0, 1, 2, 3].map(() => new THREE.MeshStandardMaterial({ map: splatTexture(), transparent: true, depthWrite: false, roughness: 0.22, metalness: 0, polygonOffset: true, polygonOffsetFactor: -2, envMapIntensity: 0.5 }));
+const splatGeo = new THREE.PlaneGeometry(1, 1); splatGeo.rotateX(-Math.PI / 2);
+const splats = [];
+function splat(x, z, size, stretchDir) {
+  const m = new THREE.Mesh(splatGeo, splatMats[(Math.random() * 4) | 0]);
+  m.position.set(x, 0.002 + splats.length % 20 * 0.00005, z);
+  m.rotation.y = stretchDir !== undefined ? stretchDir : rand(0, 7);
+  m.scale.set(size * (stretchDir !== undefined ? 1.7 : 1), 1, size);
+  m.receiveShadow = true;
+  scene.add(m); splats.push(m);
+  if (splats.length > 350) scene.remove(splats.shift());
+}
+const woundMat = new THREE.MeshStandardMaterial({ map: splatTexture(), transparent: true, depthWrite: false, roughness: 0.2, polygonOffset: true, polygonOffsetFactor: -4 });
+function poolGeometry(seed) {
+  const shape = new THREE.Shape(), n = 64;
   for (let i = 0; i <= n; i++) {
     const a = (i / n) * Math.PI * 2;
-    const r = 0.5 * (0.78 + 0.16 * Math.sin(a * 3 + seed) + 0.1 * Math.sin(a * 7 + seed * 2.3) + rand(-0.05, 0.05));
-    const x = Math.cos(a) * r, y = Math.sin(a) * r;
-    if (i === 0) shape.moveTo(x, y); else shape.lineTo(x, y);
+    const r = 0.5 * (0.86 + 0.08 * Math.sin(a * 3 + seed) + 0.05 * Math.sin(a * 5 + seed * 2.1));
+    if (i === 0) shape.moveTo(Math.cos(a) * r, Math.sin(a) * r); else shape.lineTo(Math.cos(a) * r, Math.sin(a) * r);
   }
-  const g = new THREE.ExtrudeGeometry(shape, { depth: 0.0005, bevelEnabled: true, bevelThickness: 0.0035, bevelSize: 0.012, bevelSegments: 4, curveSegments: 4 });
+  const g = new THREE.ExtrudeGeometry(shape, { depth: 0.0004, bevelEnabled: true, bevelThickness: 0.0025, bevelSize: 0.025, bevelSegments: 6, curveSegments: 8 });
   g.rotateX(-Math.PI / 2);
   return g;
 }
-const SPLAT_PER = 700;
-// puddles on the ground: darker and less mirror-like than the airborne drops, so they don't flash white against the sky
-const puddleMat = new THREE.MeshPhysicalMaterial({ color: 0x400303, roughness: 0.4, metalness: 0, specularIntensity: 0.35, envMapIntensity: 0.3 });
-const splatMeshes = [0, 1, 2, 3].map(i => {
-  const m = new THREE.InstancedMesh(blobGeometry(i * 1.7), puddleMat, SPLAT_PER);
-  m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  m.receiveShadow = true; m.frustumCulled = false;
-  for (let k = 0; k < SPLAT_PER; k++) m.setMatrixAt(k, ZERO);
-  scene.add(m);
-  return { m, cursor: 0 };
-});
-const tmpM = new THREE.Matrix4(), tmpQ = new THREE.Quaternion(), tmpS = V(), UPV = new THREE.Vector3(0, 1, 0);
-function splat(x, z, size, stretchDir) {
-  const s = splatMeshes[(Math.random() * 4) | 0];
-  tmpQ.setFromAxisAngle(UPV, stretchDir !== undefined ? stretchDir : rand(0, Math.PI * 2));
-  tmpS.set(size * (stretchDir !== undefined ? 1.8 : rand(0.85, 1.15)), 1, size);
-  tmpM.compose(tmpS.clone().set(x, 0.0008 + Math.random() * 0.0006, z), tmpQ, tmpS);
-  s.m.setMatrixAt(s.cursor, tmpM); s.cursor = (s.cursor + 1) % SPLAT_PER;
-  s.m.instanceMatrix.needsUpdate = true;
-}
-// pools grow slowly under a body that's bleeding out
+const poolMat = new THREE.MeshPhysicalMaterial({ color: 0x3c0000, roughness: 0.12, metalness: 0, clearcoat: 0.6, clearcoatRoughness: 0.1, specularIntensity: 0.45, envMapIntensity: 0.55 });
 const pools = [];
 function pool(x, z, max) {
   for (const p of pools) if (Math.hypot(p.x - x, p.z - z) < 0.3) { p.max = Math.min(1.5, Math.max(p.max, max)); return; }
-  const m = new THREE.Mesh(blobGeometry(rand(0, 9)), puddleMat);
-  m.position.set(x, 0.0012, z); m.rotation.y = rand(0, 6.28); m.scale.set(0.05, 1, 0.05); m.receiveShadow = true;
+  const m = new THREE.Mesh(poolGeometry(rand(0, 9)), poolMat);
+  m.position.set(x, 0.0015, z); m.rotation.y = rand(0, 6.28); m.scale.set(0.05, 1, 0.05); m.receiveShadow = true;
   scene.add(m); pools.push({ x, z, m, s: 0.05, max });
 }
 
@@ -314,7 +321,7 @@ function dust(pos, amount, color = 0xb5ada2) {
     const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTex, color, transparent: true, depthWrite: false, opacity: 0, rotation: rand(0, 6.28) }));
     s.position.copy(pos).add(new THREE.Vector3(rand(-0.15, 0.15), rand(0, 0.08), rand(-0.15, 0.15)));
     const a = rand(0, Math.PI * 2), sp = rand(0.25, 0.9);
-    s.userData = { t: 0, life: rand(1.6, 3), v: new THREE.Vector3(Math.cos(a) * sp, rand(0.08, 0.35), Math.sin(a) * sp), size: rand(0.35, 0.8), spin: rand(-0.4, 0.4) };
+    s.userData = { t: 0, life: rand(1.2, 2.2), v: new THREE.Vector3(Math.cos(a) * sp, rand(0.05, 0.25), Math.sin(a) * sp), size: rand(0.22, 0.45), spin: rand(-0.4, 0.4) };
     scene.add(s); puffs.push(s);
   }
 }
@@ -428,131 +435,54 @@ class Soldier {
     this.root = cloneSkinned(MODEL.scene);
     this.root.scale.setScalar(MODEL_SCALE);
     this.root.position.set(x, 0, z); this.root.rotation.y = yaw;
+    this.bones = {}; this.boneList = [];
     this.root.traverse(o => {
       if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; }
       if (o.isSkinnedMesh) hitMeshes.set(o, this);
-      if (o.isBone) (this.bones = this.bones || {})[o.name.replace("mixamorig", "")] = o;
+      if (o.isBone) { this.bones[o.name.replace("mixamorig", "")] = o; this.boneList.push(o); } // traverse order: parents first
     });
     scene.add(this.root);
     this.mixer = new THREE.AnimationMixer(this.root);
-    const clip = n => MODEL.animations.find(a => a.name === n);
-    this.idle = this.mixer.clipAction(clip("Idle")); this.idle.play();
-    this.walk = this.mixer.clipAction(clip("Walk")); this.walk.setEffectiveWeight(0);
+    this.mixer.clipAction(MODEL.animations.find(a => a.name === "Idle")).play();
     this.mixer.update(rand(0, 2));
-    this.state = "idle"; this.t = 0; this.hp = 100;
+    this.state = "idle"; this.hp = 100;
     this.wounds = []; this.parts = {}; this.joints = {}; this.bleed = [];
     soldiers.push(this);
   }
   boneWorld(n) { return this.bones[n].getWorldPosition(V()); }
-  // which body region a world point is closest to (before the ragdoll exists)
-  region(point) {
-    let best = "chest", bd = Infinity;
-    for (const s of SEGS) {
-      const a = this.boneWorld(s.a), b = this.bones[s.b] ? this.boneWorld(s.b) : a.clone().add(new THREE.Vector3(0, 0.2, 0));
-      const ab = b.clone().sub(a), t = THREE.MathUtils.clamp(point.clone().sub(a).dot(ab) / ab.lengthSq(), 0, 1);
-      const d = a.addScaledVector(ab, t).distanceTo(point) - (s.r || s.w[0]);
-      if (d < bd) { bd = d; best = s.n; }
-    }
-    return best;
-  }
+
   // ---------------------------------------------------------- hits
-  hit(point, normal, dir, hitObject) {
-    const region = this.state === "ragdoll" ? this.nearestPart(point) : this.region(point);
-    const head = region === "head";
-    // a 3D wound: glossy blood blob stuck to the body, plus a few smaller ones around it
-    const holder = this.state === "ragdoll" ? this.parts[region].group : this.bones[region === "head" ? "Head" : SEGS.find(s => s.n === region).a];
-    holder.updateMatrixWorld(true);
-    const wound = new THREE.Group();
-    const inv = holder.matrixWorld.clone().invert();
-    wound.position.copy(point.clone().addScaledVector(normal, 0.004).applyMatrix4(inv));
-    wound.quaternion.copy(holder.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(new THREE.Quaternion().setFromUnitVectors(UPV, normal)));
-    const ws = 1 / holder.getWorldScale(V()).x;
-    wound.scale.setScalar(ws);
-    for (let i = 0; i < 4; i++) {
-      const b = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), bloodMat);
-      const r = i === 0 ? 0.022 : rand(0.008, 0.016);
-      b.scale.set(r, r * 0.3, r * rand(1, 1.8));
-      b.position.set(i === 0 ? 0 : rand(-0.035, 0.035), 0, i === 0 ? 0 : rand(-0.01, 0.06));
-      wound.add(b);
-    }
-    holder.add(wound);
+  hit(point, normal, dir) {
+    const head = this.state === "idle" ? this.headHit(point) : this.nearestPart(point) === "head";
+    if (this.state === "idle") this.becomeRagdoll(point, dir, !head);
+    const region = this.nearestPart(point);
+    const part = this.parts[region];
+    // push the part that was hit
+    const b = part.body;
+    b.applyImpulse(new CANNON.Vec3(dir.x, dir.y * 0.3, dir.z).scale(head ? 7 : (this.balance && this.balance.t < 0.05 ? 6 : 9)), new CANNON.Vec3(point.x - b.position.x, point.y - b.position.y, point.z - b.position.z));
+    // a wound that sits on the body and keeps bleeding
+    part.group.updateMatrixWorld(true);
+    const wound = new THREE.Object3D();
+    wound.position.copy(part.group.worldToLocal(point.clone().addScaledVector(normal, 0.01)));
+    wound.quaternion.copy(part.group.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(new THREE.Quaternion().setFromUnitVectors(UPV, normal)));
+    const stain = new THREE.Mesh(new THREE.CircleGeometry(rand(0.03, 0.045), 20), woundMat);
+    stain.rotation.x = -Math.PI / 2; stain.position.y = 0.002;
+    wound.add(stain);
+    part.group.add(wound);
     this.wounds.push({ obj: wound, region });
-    this.bleed.push({ obj: wound, t: 0, dur: head ? 4 : 14, rate: head ? 35 : 12, dir: UPV });
-    // spray from the entry and out the back
-    spray(point, normal, head ? 70 : 32, 1.8, 0.6);
-    spray(point, dir, head ? 110 : 45, 4.8, 0.55);
+    this.bleed.push({ obj: wound, t: 0, dur: head ? 4 : 12, rate: head ? 40 : 14 });
+    spray(point, normal, head ? 60 : 26, 1.6, 0.5);
+    spray(point, dir, head ? 100 : 40, 4.5, 0.5);
     if (head) Sound.crack(point); else Sound.flesh(point);
-    this.hp -= head ? 200 : region === "chest" || region === "pelvis" ? 45 : 22;
-    if (this.state === "ragdoll") {
-      const b = this.parts[region].body;
-      b.applyImpulse(new CANNON.Vec3(dir.x, dir.y, dir.z).scale(9), new CANNON.Vec3(point.x - b.position.x, point.y - b.position.y, point.z - b.position.z));
-      return;
-    }
-    if (head || this.hp <= 0) { this.goLimp(dir, head ? 1 : 0.6); return; }
-    // anything else: he's hurt and fights to stay up
-    if (this.state === "idle") this.startHurt(point, dir, region);
-    else this.hurtT = Math.max(this.hurtT, this.hurtDur - 0.9); // a second hit takes the legs out sooner
-    this.flinch = 1;
+    this.hp -= head ? 200 : 40;
+    if (head) this.balance = null;                       // instantly limp
+    else if (this.balance && this.balance.t > 0.2) this.balance.dur = Math.max(this.balance.t + 0.5, this.balance.dur - 0.9); // more hits, sooner down
   }
-  startHurt(point, dir, region) {
-    this.state = "hurt"; this.hurtT = 0; this.hurtDur = rand(2.6, 3.4);
-    this.woundObj = this.wounds[this.wounds.length - 1].obj;
-    // grab with the hand on the wound's side
-    const local = point.clone().applyMatrix4(this.root.matrixWorld.clone().invert());
-    this.hand = local.x > 0 ? "Left" : "Right";
-    const flat = new THREE.Vector3(dir.x, 0, dir.z).normalize();
-    this.drift = flat.multiplyScalar(1.3);
-    this.idle.fadeOut(0.25);
-    this.walk.reset().setEffectiveTimeScale(-0.8).setEffectiveWeight(1).fadeIn(0.3).play();
-    this.side = rand(-1, 1);
-    Sound.breath(point);
-  }
-  // ---------------------------------------------------------- per frame (animated states)
-  update(dt) {
-    this.t += dt;
-    if (this.state === "ragdoll") { this.updateRagdoll(dt); return; }
-    this.mixer.update(dt);
-    if (this.state !== "hurt") return;
-    const t = (this.hurtT += dt), k = t / this.hurtDur;
-    this.flinch = Math.max(0, (this.flinch || 0) - dt * 3);
-    // stagger back, slowing as the legs give
-    const slow = Math.max(0.15, 1 - k * 1.1);
-    this.root.position.addScaledVector(this.drift, dt * slow);
-    this.root.position.x += Math.sin(t * 3.1) * 0.12 * dt * this.side;
-    this.walk.setEffectiveTimeScale(-0.8 * slow);
-    const buckle = THREE.MathUtils.smoothstep(k, 0.55, 1);
-    if (buckle > 0 && this.walk.getEffectiveWeight() > 0.01 && !this.walkFading) { this.walk.fadeOut(0.7); this.idle.reset().fadeIn(0.7).play(); this.walkFading = true; }
-    this.root.position.y = -0.22 * buckle;
-    // body language: double over the wound, head drops, knees bend
-    const B = this.bones;
-    const curl = 0.35 + 0.25 * buckle - 0.5 * this.flinch;
-    for (const [n, f] of [["Spine", 0.3], ["Spine1", 0.35], ["Spine2", 0.35]]) B[n].rotateX(curl * f);
-    B.Spine1.rotateZ(Math.sin(t * 2.3) * 0.06);
-    B.Neck.rotateX(0.25 + 0.2 * buckle); B.Head.rotateX(0.15 + Math.sin(t * 5) * 0.03);
-    for (const s of ["Left", "Right"]) {
-      B[s + "UpLeg"].rotateX(-0.95 * buckle);
-      B[s + "Leg"].rotateX(1.7 * buckle);
-      B[s + "Foot"].rotateX(-0.6 * buckle);
-    }
-    // the other arm hangs loose and sways
-    const free = this.hand === "Left" ? "Right" : "Left";
-    B[free + "Arm"].rotateZ((free === "Left" ? 1 : -1) * (0.15 + 0.1 * Math.sin(t * 2)));
-    this.root.updateMatrixWorld(true);
-    // the grabbing hand finds the wound
-    const target = this.woundObj.getWorldPosition(V());
-    const fwd = V().set(0, 0, 1).applyQuaternion(this.root.quaternion);
-    target.addScaledVector(fwd, 0.035);
-    const shoulder = this.boneWorld(this.hand + "Arm");
-    const pole = shoulder.clone().add(new THREE.Vector3(0, -0.6, 0)).addScaledVector(V().set(this.hand === "Left" ? 1 : -1, 0, 0).applyQuaternion(this.root.quaternion), 0.5).addScaledVector(fwd, -0.2);
-    const w = THREE.MathUtils.smoothstep(t, 0.15, 0.55);
-    armIK(B[this.hand + "Arm"], B[this.hand + "ForeArm"], B[this.hand + "Hand"], target, pole, w);
-    if (Math.random() < dt * 0.8) Sound.breath(this.boneWorld("Head"));
-    if (k >= 1) this.goLimp(this.drift.clone().normalize(), 0.35);
-  }
-  // ---------------------------------------------------------- ragdoll
-  goLimp(dir, push) {
-    if (this.state === "ragdoll") return;
-    this.state = "ragdoll"; this.limpT = 0; this.landed = false;
+  headHit(point) { return point.distanceTo(this.boneWorld("Head")) < 0.2; }
+
+  // ---------------------------------------------------------- the ragdoll is built the moment he's hit
+  becomeRagdoll(point, dir, fightBack) {
+    this.state = "ragdoll"; this.t = 0;
     this.mixer.stopAllAction();
     this.root.updateMatrixWorld(true);
     const right = V().set(1, 0, 0).applyQuaternion(this.root.quaternion);
@@ -560,68 +490,151 @@ class Soldier {
       const a = this.boneWorld(s.a);
       let b = this.bones[s.b] ? this.boneWorld(s.b) : null;
       if (!b) { const neck = this.boneWorld("Neck"); b = a.clone().add(a.clone().sub(neck).normalize().multiplyScalar(0.22)); }
-      const dirv = b.clone().sub(a); let len = dirv.length(); dirv.normalize();
-      if (s.ext) { b.addScaledVector(dirv, s.ext); len += s.ext; }
-      const x = right.clone().addScaledVector(dirv, -right.dot(dirv)); if (x.lengthSq() < 1e-4) x.set(0, 0, 1); x.normalize();
-      const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, dirv, V().crossVectors(x, dirv)));
+      const d = b.clone().sub(a); let len = d.length(); d.normalize();
+      if (s.ext) { b.addScaledVector(d, s.ext); len += s.ext; }
+      const x = right.clone().addScaledVector(d, -right.dot(d)); if (x.lengthSq() < 1e-4) x.set(0, 0, 1); x.normalize();
+      const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, d, V().crossVectors(x, d)));
       const c = a.clone().add(b).multiplyScalar(0.5);
-      const body = new CANNON.Body({ mass: s.m, material: fleshMat, linearDamping: 0.08, angularDamping: 0.5, collisionFilterGroup: 2, collisionFilterMask: 1 });
+      const body = new CANNON.Body({ mass: s.m, material: fleshMat, linearDamping: 0.1, angularDamping: 0.6, collisionFilterGroup: 2, collisionFilterMask: 1, allowSleep: true });
       body.addShape(s.r ? new CANNON.Sphere(s.r) : new CANNON.Box(new CANNON.Vec3(s.w[0], Math.max(len / 2, 0.05), s.w[1])));
-      body.position.set(c.x, c.y, c.z); body.quaternion.set(q.x, q.y, q.z, q.w);
-      // carry the stagger's momentum into the fall
-      body.velocity.set(this.drift ? this.drift.x * 0.4 : 0, -0.2, this.drift ? this.drift.z * 0.4 : 0);
+      body.position.set(c.x, c.y + 0.01, c.z); body.quaternion.set(q.x, q.y, q.z, q.w);
       body.addEventListener("collide", e => this.onContact(body, e));
       world.addBody(body);
       const group = new THREE.Group(); scene.add(group);
-      group.position.copy(c); group.quaternion.copy(q);
-      this.parts[s.n] = { def: s, body, group, start: a, dir: dirv, half: len / 2 };
+      group.position.copy(body.position); group.quaternion.copy(q);
+      this.parts[s.n] = { def: s, body, group, start: a, dir: d, half: len / 2 };
     }
-    // nothing may start inside the floor, or the solver throws him into the air
-    let lowest = Infinity;
-    for (const k in this.parts) {
-      const { body, half, def } = this.parts[k];
-      const ax = V().set(0, 1, 0).applyQuaternion(toQ(body.quaternion));
-      lowest = Math.min(lowest, body.position.y - Math.abs(ax.y) * half - (def.r || def.w[0]));
-    }
-    const lift = Math.max(0, 0.03 - lowest);
-    if (lift > 0) for (const k in this.parts) { this.parts[k].body.position.y += lift; this.parts[k].start.y += lift; }
     const loc = (body, v) => body.quaternion.inverse().vmult(new CANNON.Vec3(v.x, v.y, v.z));
     for (const s of SEGS) {
       if (!s.p) continue;
       const A = this.parts[s.p].body, Bd = this.parts[s.n].body, pv = this.parts[s.n].start, d = this.parts[s.n].dir;
-      const c = new CANNON.ConeTwistConstraint(A, Bd, { pivotA: loc(A, pv.clone().sub(A.position)), pivotB: loc(Bd, pv.clone().sub(Bd.position)), axisA: loc(A, d), axisB: loc(Bd, d), angle: s.ang, twistAngle: s.tw, collideConnected: false });
+      const c = new CANNON.ConeTwistConstraint(A, Bd, { pivotA: loc(A, pv.clone().sub(A.position)), pivotB: loc(Bd, pv.clone().sub(Bd.position)), axisA: loc(A, d), axisB: loc(Bd, d), angle: s.ang, twistAngle: s.tw, collideConnected: false, maxForce: 1e7 });
       world.addConstraint(c); this.joints[s.n] = c;
     }
-    // bones ride rigidly on the nearest ragdoll body above them
-    this.offsets = [];
-    for (const name in this.bones) {
-      let b = this.bones[name];
+    // each bone keeps its rotation relative to the body that carries it; only the hips take a position.
+    // the skeleton's own bone lengths are kept, so the mesh can never stretch or tear.
+    this.drive = this.boneList.map(bone => {
+      let b = bone;
       while (b && !(b.isBone && SEG_BY_BONE[b.name])) b = b.parent;
       const owner = b ? SEG_BY_BONE[b.name] : "pelvis";
-      const body = this.parts[owner].body;
-      const m = new THREE.Matrix4().compose(toV(body.position), toQ(body.quaternion), ONE);
-      this.offsets.push({ bone: this.bones[name], owner, off: m.invert().multiply(this.bones[name].matrixWorld) });
+      const bq = toQ(this.parts[owner].body.quaternion).invert().multiply(bone.getWorldQuaternion(new THREE.Quaternion()));
+      return { bone, owner, off: bq };
+    });
+    const pel = this.parts.pelvis.body;
+    this.hipOffset = toQ(pel.quaternion).invert().clone();
+    this.hipLocal = this.bones.Hips.getWorldPosition(V()).sub(toV(pel.position)).applyQuaternion(toQ(pel.quaternion).invert());
+    // he fights to stay on his feet for a few seconds, holding the wound
+    if (fightBack) {
+      this.startPuppet(point, dir);
+      const local = point.clone().applyMatrix4(this.root.matrixWorld.clone().invert());
+      this.hand = local.x > 0 ? "L" : "R";
+      this.gripTarget = point.clone();
+      Sound.breath(point);
     }
-    // wounds move from bones onto the physics parts
-    for (const w of this.wounds) {
-      const part = this.parts[w.region] || this.parts.chest;
-      part.group.updateMatrixWorld(true);
-      part.group.attach(w.obj);
-    }
-    // the hand stays pressed to the wound while he goes down
-    if (this.hand && this.woundObj) {
-      const fore = this.parts[this.hand === "Left" ? "lArmL" : "lArmR"].body, chest = this.parts.chest.body;
-      const wp = this.woundObj.getWorldPosition(V());
-      const handTip = toV(fore.position).add(V().set(0, 1, 0).applyQuaternion(toQ(fore.quaternion)).multiplyScalar(this.parts[this.hand === "Left" ? "lArmL" : "lArmR"].half * 0.9));
-      this.grip = new CANNON.PointToPointConstraint(fore, loc(fore, handTip.sub(fore.position)), chest, loc(chest, wp.sub(chest.position)), 35);
-      world.addConstraint(this.grip);
-    }
-    // a little topple so he crumples rather than folding straight down
-    const torque = new THREE.Vector3(0, 1, 0).cross(dir).multiplyScalar(push * 6);
-    this.parts.chest.body.angularVelocity.set(torque.x, torque.y, torque.z);
-    for (const p of Object.values(this.parts)) p.body.wakeUp();
-    this.root.traverse(o => { if (o.isBone) { o.matrixAutoUpdate = false; o.matrixWorldAutoUpdate = false; } });
   }
+
+  // ---------------------------------------------------------- active-ragdoll balance
+  // ---------------------------------------------------------- animated ragdoll: a hidden puppet plays the hurt motion,
+  // and the physics bodies are steered toward its pose with a strength that fades until he's fully limp
+  segTransform(bones, s, right) {
+    const a = bones[s.a].getWorldPosition(V());
+    let b = bones[s.b] ? bones[s.b].getWorldPosition(V()) : null;
+    if (!b) { const neck = bones.Neck.getWorldPosition(V()); b = a.clone().add(a.clone().sub(neck).normalize().multiplyScalar(0.22)); }
+    const d = b.clone().sub(a); let len = d.length(); d.normalize();
+    if (s.ext) { b.addScaledVector(d, s.ext); len += s.ext; }
+    const x = right.clone().addScaledVector(d, -right.dot(d)); if (x.lengthSq() < 1e-4) x.set(0, 0, 1); x.normalize();
+    const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, d, V().crossVectors(x, d)));
+    return { a, b, c: a.clone().add(b).multiplyScalar(0.5), d, len, q };
+  }
+  startPuppet(point, dir) {
+    this.puppet = cloneSkinned(MODEL.scene);
+    this.puppet.scale.setScalar(MODEL_SCALE);
+    this.puppet.position.copy(this.root.position); this.puppet.quaternion.copy(this.root.quaternion);
+    this.puppet.visible = false;
+    scene.add(this.puppet);
+    this.pb = {};
+    this.puppet.traverse(o => { if (o.isBone) this.pb[o.name.replace("mixamorig", "")] = o; });
+    this.pm = new THREE.AnimationMixer(this.puppet);
+    const clip = n => MODEL.animations.find(a => a.name === n);
+    this.pIdle = this.pm.clipAction(clip("Idle"));
+    this.pWalk = this.pm.clipAction(clip("Walk"));
+    this.pWalk.setEffectiveTimeScale(-0.8).play();
+    this.pIdle.play(); this.pIdle.setEffectiveWeight(0);
+    const flat = new THREE.Vector3(dir.x, 0, dir.z).normalize();
+    this.balance = { t: 0, dur: rand(2.6, 3.3), drift: flat.multiplyScalar(1.2), side: rand(-1, 1), faded: false };
+  }
+  stepBalance(dt) {
+    const B = this.balance;
+    if (!B) return;
+    B.t += dt;
+    const k = B.t / B.dur;
+    if (k >= 1) { this.balance = null; scene.remove(this.puppet); return; }
+    // ---- puppet motion: stumble back, double over, hand on the wound, knees give
+    this.pm.update(dt);
+    const slow = Math.max(0.15, 1 - k * 1.1);
+    this.puppet.position.addScaledVector(B.drift, dt * slow);
+    this.puppet.position.x += Math.sin(B.t * 3.1) * 0.12 * dt * B.side;
+    this.pWalk.setEffectiveTimeScale(-0.8 * slow);
+    const buckle = THREE.MathUtils.smoothstep(k, 0.5, 1);
+    if (buckle > 0 && !B.faded) { B.faded = true; this.pWalk.fadeOut(0.7); this.pIdle.setEffectiveWeight(1).fadeIn(0.7); }
+    this.puppet.position.y = -0.24 * buckle;
+    const P = this.pb;
+    const curl = 0.4 + 0.3 * buckle;
+    for (const [n, f] of [["Spine", 0.3], ["Spine1", 0.35], ["Spine2", 0.35]]) P[n].rotateX(curl * f);
+    P.Neck.rotateX(0.25 + 0.2 * buckle);
+    for (const sd of ["Left", "Right"]) { P[sd + "UpLeg"].rotateX(-0.9 * buckle); P[sd + "Leg"].rotateX(1.6 * buckle); P[sd + "Foot"].rotateX(-0.5 * buckle); }
+    this.puppet.updateMatrixWorld(true);
+    if (this.hand && this.wounds.length) {
+      const H = this.hand === "L" ? "Left" : "Right";
+      const target = this.wounds[0].obj.getWorldPosition(V());
+      const fwd = V().set(0, 0, 1).applyQuaternion(this.puppet.quaternion);
+      // the wound rides the ragdoll; aim at the same spot on the puppet's chest
+      const off = target.sub(toV(this.parts.chest.body.position));
+      const chestT = this.segTransform(P, SEGS[1], V().set(1, 0, 0).applyQuaternion(this.puppet.quaternion));
+      const goal = chestT.c.clone().add(off.applyQuaternion(toQ(this.parts.chest.body.quaternion).invert()).applyQuaternion(chestT.q)).addScaledVector(fwd, 0.03);
+      const sh = P[H + "Arm"].getWorldPosition(V());
+      const pole = sh.clone().add(new THREE.Vector3(0, -0.6, 0)).addScaledVector(V().set(H === "Left" ? 1 : -1, 0, 0).applyQuaternion(this.puppet.quaternion), 0.5).addScaledVector(fwd, -0.2);
+      armIK(P[H + "Arm"], P[H + "ForeArm"], P[H + "Hand"], goal, pole, THREE.MathUtils.smoothstep(B.t, 0.1, 0.5));
+    }
+    // ---- steer each body toward the puppet's pose
+    // strength: a moment of free reaction to the bullet, then he catches himself, then slowly loses it
+    const catchUp = THREE.MathUtils.smoothstep(B.t, 0.08, 0.45);
+    const strength = catchUp * Math.pow(1 - k, 1.2);
+    const right = V().set(1, 0, 0).applyQuaternion(this.puppet.quaternion);
+    const blend = Math.min(1, strength * dt * 22);
+    for (const sdef of SEGS) {
+      const body = this.parts[sdef.n].body;
+      const T = this.segTransform(P, sdef, right);
+      const vT = T.c.sub(toV(body.position)).multiplyScalar(10);
+      body.velocity.x += (vT.x - body.velocity.x) * blend;
+      body.velocity.y += (vT.y - body.velocity.y) * blend;
+      body.velocity.z += (vT.z - body.velocity.z) * blend;
+      const qe = T.q.clone().multiply(toQ(body.quaternion).invert());
+      if (qe.w < 0) { qe.x *= -1; qe.y *= -1; qe.z *= -1; qe.w *= -1; }
+      const ang = 2 * Math.acos(Math.min(1, qe.w)), sn = Math.sqrt(Math.max(1e-9, 1 - qe.w * qe.w));
+      const wT = new THREE.Vector3(qe.x / sn, qe.y / sn, qe.z / sn).multiplyScalar(ang * 10);
+      body.angularVelocity.x += (wT.x - body.angularVelocity.x) * blend;
+      body.angularVelocity.y += (wT.y - body.angularVelocity.y) * blend;
+      body.angularVelocity.z += (wT.z - body.angularVelocity.z) * blend;
+      body.wakeUp();
+    }
+    if (Math.random() < dt * 0.7) Sound.breath(toV(this.parts.chest.body.position));
+  }
+  // the hand presses on the wound; a weak spring, so a fall can pull it away
+  stepGrip() {
+    if (!this.hand || this.t > 6 || !this.wounds.length) return;
+    const fore = this.parts[this.hand === "L" ? "lArmL" : "lArmR"];
+    const w = this.wounds[0].obj.getWorldPosition(V());
+    const ax = fore.body.quaternion.vmult(new CANNON.Vec3(0, 1, 0));
+    const tip = toV(fore.body.position).add(toV(ax).multiplyScalar(fore.half * 0.8));
+    const pull = w.sub(tip);
+    const strength = this.t < 4 ? 1 : 1 - (this.t - 4) / 2;
+    const f = pull.multiplyScalar(260 * strength).sub(toV(fore.body.velocity).multiplyScalar(14 * strength));
+    fore.body.applyForce(new CANNON.Vec3(f.x, f.y, f.z), new CANNON.Vec3(tip.x, tip.y, tip.z));
+    const chest = this.parts.chest.body;
+    chest.applyForce(new CANNON.Vec3(-f.x * 0.5, -f.y * 0.5, -f.z * 0.5), chest.position);
+  }
+
   nearestPart(point) {
     let best = "chest", bd = Infinity;
     for (const k in this.parts) {
@@ -637,40 +650,38 @@ class Soldier {
     if (e.body !== ground) return;
     const v = Math.abs(e.contact.getImpactVelocityAlongNormal());
     const now = performance.now();
-    if (v < 0.5 || now - (body.lastHit || 0) < 250) return;
+    if (v < 0.7 || now - (body.lastHit || 0) < 300) return;
     body.lastHit = now;
     const p = toV(body.position); p.y = 0.03;
-    Sound.thud(p, v * (body.mass / 8));
-    dust(p, Math.min(6, 1 + Math.round(v * body.mass / 6)));
-    if (!this.landed && (body === this.parts.chest.body || body === this.parts.pelvis.body)) { this.landed = true; this.struggleT = 0; }
+    const heavy = body.mass >= 7;
+    Sound.thud(p, v * body.mass / 7);
+    if (heavy && v > 1.2) dust(p, v > 2.5 ? 3 : 2);
   }
-  updateRagdoll(dt) {
-    this.limpT += dt;
-    if (!this.landed && this.limpT > 0.4 && this.parts.pelvis.body.position.y < 0.35) { this.landed = true; this.struggleT = 0; }
+  update(dt) {
+    if (this.state !== "ragdoll") { this.mixer.update(dt); return; }
+    this.t += dt;
+    this.stepBalance(dt);
+    this.stepGrip();
     for (const k in this.parts) { const { body, group } = this.parts[k]; group.position.copy(body.position); group.quaternion.copy(body.quaternion); }
-    if (this.grip && this.limpT > 4.5) { world.removeConstraint(this.grip); this.grip = null; }
-    // on the ground he tries to push himself up a couple of times, weaker each time, then stops
-    if (this.landed && this.struggleT < 5 && this.hp > -100) {
-      this.struggleT += dt;
-      const fade = 1 - this.struggleT / 5;
-      const beat = Math.max(0, Math.sin(this.struggleT * 2.6)) * fade;
-      for (const [n, s] of [["uLegL", 1], ["uLegR", -1], ["lLegL", 1], ["lLegR", -1]]) {
-        const b = this.parts[n].body;
-        b.applyTorque(b.quaternion.vmult(new CANNON.Vec3(beat * 9 * s, 0, beat * 3)));
-      }
-      const c = this.parts.chest.body;
-      c.applyForce(new CANNON.Vec3(0, beat * 120, 0), c.position);
-      if (beat > 0.6 && Math.random() < dt * 2) Sound.breath(toV(c.position));
-      for (const p of Object.values(this.parts)) p.body.wakeUp();
-    }
   }
-  // after the scene matrices are updated, write the ragdoll pose into the skeleton
+  // before the scene matrices update: set bone rotations (and the hips' position) from the bodies
   pose() {
     if (this.state !== "ragdoll") return;
-    const m = {};
-    for (const k in this.parts) m[k] = new THREE.Matrix4().compose(toV(this.parts[k].body.position), toQ(this.parts[k].body.quaternion), ONE);
-    for (const o of this.offsets) o.bone.matrixWorld.multiplyMatrices(m[o.owner], o.off);
-    for (const k in this.parts) this.parts[k].group.updateMatrixWorld(true);
+    const worldQ = new Map();
+    const parentQ = new THREE.Quaternion();
+    for (const d of this.drive) {
+      const want = toQ(this.parts[d.owner].body.quaternion).multiply(d.off);
+      const parent = d.bone.parent;
+      if (worldQ.has(parent)) parentQ.copy(worldQ.get(parent)); else parent.getWorldQuaternion(parentQ);
+      d.bone.quaternion.copy(parentQ.clone().invert().multiply(want));
+      worldQ.set(d.bone, want);
+    }
+    // hips position follows the pelvis body
+    const pel = this.parts.pelvis.body;
+    const hipsWorld = toV(pel.position).add(this.hipLocal.clone().applyQuaternion(toQ(pel.quaternion)));
+    const hips = this.bones.Hips;
+    hips.parent.updateMatrixWorld(true);
+    hips.position.copy(hips.parent.worldToLocal(hipsWorld));
   }
   bleedTick(dt) {
     for (const b of this.bleed) {
@@ -680,19 +691,18 @@ class Soldier {
       if (!n) continue;
       const at = b.obj.getWorldPosition(V());
       const out = V().set(0, 1, 0).applyQuaternion(b.obj.getWorldQuaternion(new THREE.Quaternion()));
-      for (let i = 0; i < n; i++) drop(at, out.clone().multiplyScalar(rand(0.1, 0.6)).add(new THREE.Vector3(rand(-0.1, 0.1), -0.2, rand(-0.1, 0.1))), rand(0.004, 0.009));
+      for (let i = 0; i < n; i++) drop(at, out.clone().multiplyScalar(rand(0.1, 0.5)).add(new THREE.Vector3(rand(-0.1, 0.1), -0.15, rand(-0.1, 0.1))), rand(0.004, 0.008));
     }
-    // a body lying still keeps pooling around its wounds
-    if (this.state === "ragdoll" && this.limpT > 1.2) for (const w of this.wounds) {
+    // once he's lying still the wounds pool on the ground
+    if (this.state === "ragdoll" && !this.balance && this.t > 3) for (const w of this.wounds) {
       const p = w.obj.getWorldPosition(V());
-      if (p.y < 0.35 && Math.random() < dt * 0.9) pool(p.x + rand(-0.08, 0.08), p.z + rand(-0.08, 0.08), 0.6 + this.wounds.length * 0.18);
+      if (p.y < 0.4 && Math.random() < dt * 0.8) pool(p.x, p.z, 0.55 + this.wounds.length * 0.15);
     }
   }
   remove() {
     scene.remove(this.root);
     for (const k in this.parts) { world.removeBody(this.parts[k].body); scene.remove(this.parts[k].group); }
     for (const k in this.joints) world.removeConstraint(this.joints[k]);
-    if (this.grip) world.removeConstraint(this.grip);
     for (const [m, s] of [...hitMeshes]) if (s === this) hitMeshes.delete(m);
     soldiers.splice(soldiers.indexOf(this), 1);
   }
@@ -777,7 +787,7 @@ function shoot() {
   const s = hitMeshes.get(hit.object);
   let n = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : dir.clone().negate();
   if (n.dot(dir) > 0) n.negate();
-  s.hit(hit.point, n, dir, hit.object);
+  s.hit(hit.point, n, dir);
   hitEl.style.opacity = 1; hitT = 0.12;
 }
 
@@ -845,7 +855,7 @@ function update(realDt) {
   if (hitT > 0) { hitT -= realDt; if (hitT <= 0) hitEl.style.opacity = 0; }
 
   // world
-  world.step(1 / 120, dt, 8);
+  world.step(1 / 180, dt, 12);
   for (const s of soldiers) { s.update(dt); s.bleedTick(dt); }
 
   // droplets: fly, stretch along their motion, land as puddles
@@ -880,7 +890,7 @@ function update(realDt) {
     s.position.addScaledVector(u.v, dt); u.v.multiplyScalar(1 - 1.6 * dt);
     s.scale.setScalar(u.size * (1 + a * (u.grow ? 6 : 2.2)));
     s.material.rotation += u.spin * dt;
-    s.material.opacity = Math.min(1, a * 8) * (1 - a) * (u.grow ? 0.35 : 0.55);
+    s.material.opacity = Math.min(1, a * 8) * (1 - a) * (u.grow ? 0.35 : 0.3);
     if (a >= 1) { scene.remove(s); s.material.dispose(); puffs.splice(i, 1); }
   }
   // shells
@@ -899,8 +909,8 @@ function update(realDt) {
 }
 
 function render() {
-  scene.updateMatrixWorld();
   for (const s of soldiers) s.pose();
+  scene.updateMatrixWorld();
   composer.passes[composer.passes.length - 2].uniforms && (composer.passes[composer.passes.length - 2].uniforms.uTime.value = performance.now() * 0.001);
   composer.render();
 }
