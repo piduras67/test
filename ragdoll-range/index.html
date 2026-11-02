@@ -61,11 +61,12 @@
   <div class="card">
     <h1>RAGDOLL<span>RANGE</span></h1>
     <p>CLICK TO PLAY</p>
+    <p id="loading" style="color:#ff6b6b">LOADING MODELS...</p>
     <div class="keys">
       <div><kbd>W A S D</kbd>Move</div><div><kbd>Shift</kbd>Sprint</div>
       <div><kbd>Mouse 1</kbd>Shoot</div><div><kbd>Mouse 2</kbd>Aim down sights</div>
       <div><kbd>R</kbd>Reload</div><div><kbd>1</kbd><kbd>2</kbd>Pistol / Rifle</div>
-      <div><kbd>E</kbd>Spawn dummy</div><div><kbd>C</kbd>Clean up</div>
+      <div><kbd>E</kbd>Spawn person</div><div><kbd>C</kbd>Clean up</div>
       <div><kbd>Q</kbd>Slow motion</div><div><kbd>Space</kbd>Jump</div>
     </div>
     <div class="go">CLICK ANYWHERE</div>
@@ -77,6 +78,8 @@ import * as THREE from "three";
 import * as CANNON from "cannon-es";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
 
 // ---------------------------------------------------------------- renderer, scene, camera
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
@@ -90,6 +93,7 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.prepend(renderer.domElement);
 
 const scene = new THREE.Scene();
+scene.matrixWorldAutoUpdate = false; // updated by hand each frame, then ragdoll bones are written on top
 scene.background = new THREE.Color(0x0d0e10);
 scene.fog = new THREE.Fog(0x0d0e10, 14, 34);
 const pmrem = new THREE.PMREMGenerator(renderer);
@@ -366,173 +370,211 @@ function growPool(x, z, max) {
   pools.push({ x, z, mesh: m, size: 0.05, max });
 }
 
-// ---------------------------------------------------------------- the dummy (crash-test style ragdoll)
-const yellow = new THREE.MeshStandardMaterial({ color: 0xe8b520, roughness: 0.45, metalness: 0.1 });
-const black = new THREE.MeshStandardMaterial({ color: 0x18181a, roughness: 0.5, metalness: 0.3 });
-const chestMat = new THREE.MeshStandardMaterial({ map: dummyChestTex, roughness: 0.45 });
-const headMat = new THREE.MeshStandardMaterial({ map: dummyHeadTex, roughness: 0.4 });
-const fleshMatVis = new THREE.MeshStandardMaterial({ color: 0x5a0606, roughness: 0.35, metalness: 0.05 });
+// ---------------------------------------------------------------- the humans: rigged, skinned glTF models that turn into ragdolls
+const fleshMatVis = new THREE.MeshStandardMaterial({ color: 0x5a0606, roughness: 0.35, metalness: 0.05, side: THREE.DoubleSide });
 const boneMat = new THREE.MeshStandardMaterial({ color: 0xe9e0cc, roughness: 0.5 });
+const loader = new GLTFLoader();
+const MODELS = {};
+const MODEL_FILES = { soldier: "models/Soldier.glb", xbot: "models/Xbot.glb" };
+const loadModels = () => Promise.all(Object.entries(MODEL_FILES).map(([k, url]) => loader.loadAsync(url).then(g => { MODELS[k] = g; })));
 
-// name: half extents [x,y,z], centre [x,y,z], mass, hp, parent, pivot [x,y,z], cone angle, twist
-const PARTS = [
-  { n: "pelvis", h: [0.17, 0.1, 0.11], c: [0, 1.0, 0], m: 9, hp: 220 },
-  { n: "chest", h: [0.21, 0.25, 0.125], c: [0, 1.37, 0], m: 15, hp: 260, p: "pelvis", j: [0, 1.11, 0], a: 0.45, t: 0.35, axis: [0, 1, 0] },
-  { n: "head", r: 0.12, c: [0, 1.78, 0], m: 4.5, hp: 70, p: "chest", j: [0, 1.63, 0], a: 0.6, t: 0.6, axis: [0, 1, 0] },
-  { n: "uArmL", h: [0.05, 0.14, 0.05], c: [-0.28, 1.43, 0], m: 2.5, hp: 90, p: "chest", j: [-0.27, 1.58, 0], a: 1.35, t: 0.7, axis: [0, -1, 0] },
-  { n: "lArmL", h: [0.043, 0.135, 0.043], c: [-0.28, 1.13, 0], m: 1.8, hp: 70, p: "uArmL", j: [-0.28, 1.28, 0], a: 1.0, t: 0.2, axis: [0, -1, 0] },
-  { n: "uArmR", h: [0.05, 0.14, 0.05], c: [0.28, 1.43, 0], m: 2.5, hp: 90, p: "chest", j: [0.27, 1.58, 0], a: 1.35, t: 0.7, axis: [0, -1, 0] },
-  { n: "lArmR", h: [0.043, 0.135, 0.043], c: [0.28, 1.13, 0], m: 1.8, hp: 70, p: "uArmR", j: [0.28, 1.28, 0], a: 1.0, t: 0.2, axis: [0, -1, 0] },
-  { n: "uLegL", h: [0.07, 0.19, 0.07], c: [-0.1, 0.71, 0], m: 7, hp: 120, p: "pelvis", j: [-0.1, 0.9, 0], a: 0.9, t: 0.3, axis: [0, -1, 0] },
-  { n: "lLegL", h: [0.06, 0.2, 0.06], c: [-0.1, 0.29, 0], m: 4, hp: 100, p: "uLegL", j: [-0.1, 0.51, 0], a: 0.75, t: 0.1, axis: [0, -1, 0] },
-  { n: "uLegR", h: [0.07, 0.19, 0.07], c: [0.1, 0.71, 0], m: 7, hp: 120, p: "pelvis", j: [0.1, 0.9, 0], a: 0.9, t: 0.3, axis: [0, -1, 0] },
-  { n: "lLegR", h: [0.06, 0.2, 0.06], c: [0.1, 0.29, 0], m: 4, hp: 100, p: "uLegR", j: [0.1, 0.51, 0], a: 0.75, t: 0.1, axis: [0, -1, 0] },
+const BN = n => "mixamorig" + n;
+// ragdoll bodies are built along these bones the moment a person is first hit
+const SEGS = [
+  { n: "pelvis", a: "Hips", b: "Spine", w: [0.15, 0.1], m: 9, hp: 220 },
+  { n: "chest", a: "Spine", b: "Neck", w: [0.17, 0.11], m: 15, hp: 260, p: "pelvis", ang: 0.45, tw: 0.35 },
+  { n: "head", a: "Head", b: "HeadTop_End", r: 0.11, m: 4.5, hp: 70, p: "chest", ang: 0.6, tw: 0.6 },
+  { n: "uArmL", a: "LeftArm", b: "LeftForeArm", w: [0.05, 0.05], m: 2.5, hp: 90, p: "chest", ang: 1.35, tw: 0.7 },
+  { n: "lArmL", a: "LeftForeArm", b: "LeftHand", ext: 0.1, w: [0.045, 0.045], m: 1.8, hp: 70, p: "uArmL", ang: 1.0, tw: 0.2 },
+  { n: "uArmR", a: "RightArm", b: "RightForeArm", w: [0.05, 0.05], m: 2.5, hp: 90, p: "chest", ang: 1.35, tw: 0.7 },
+  { n: "lArmR", a: "RightForeArm", b: "RightHand", ext: 0.1, w: [0.045, 0.045], m: 1.8, hp: 70, p: "uArmR", ang: 1.0, tw: 0.2 },
+  { n: "uLegL", a: "LeftUpLeg", b: "LeftLeg", w: [0.075, 0.075], m: 7, hp: 120, p: "pelvis", ang: 0.9, tw: 0.3 },
+  { n: "lLegL", a: "LeftLeg", b: "LeftFoot", ext: 0.06, w: [0.06, 0.06], m: 4, hp: 100, p: "uLegL", ang: 0.75, tw: 0.1 },
+  { n: "uLegR", a: "RightUpLeg", b: "RightLeg", w: [0.075, 0.075], m: 7, hp: 120, p: "pelvis", ang: 0.9, tw: 0.3 },
+  { n: "lLegR", a: "RightLeg", b: "RightFoot", ext: 0.06, w: [0.06, 0.06], m: 4, hp: 100, p: "uLegR", ang: 0.75, tw: 0.1 },
 ];
-
-function partMesh(def) {
-  const g = new THREE.Group();
-  const add = (geo, mat, pos, rot) => {
-    const m = new THREE.Mesh(geo, mat); m.castShadow = true; m.receiveShadow = true;
-    if (pos) m.position.set(...pos); if (rot) m.rotation.set(...rot);
-    g.add(m); return m;
-  };
-  const n = def.n;
-  if (n === "head") {
-    add(new THREE.SphereGeometry(0.12, 32, 24), headMat, null, [0, Math.PI / 2, 0]);
-    add(new THREE.CylinderGeometry(0.045, 0.05, 0.1, 16), black, [0, -0.14, 0]);
-    add(new THREE.BoxGeometry(0.11, 0.02, 0.03), black, [0, -0.04, -0.11]); // mouth slot
-    for (const s of [-1, 1]) add(new THREE.SphereGeometry(0.018, 12, 8), black, [s * 0.045, 0.02, -0.108]); // eyes
-  } else if (n === "chest") {
-    add(new RoundedBoxGeometry(0.42, 0.5, 0.25, 4, 0.06), yellow);
-    add(new THREE.PlaneGeometry(0.3, 0.3), chestMat, [0, 0.03, -0.127], [0, Math.PI, 0]);
-    for (let i = 0; i < 3; i++) add(new THREE.BoxGeometry(0.4, 0.015, 0.255), black, [0, -0.17 + i * 0.07, 0]); // ribs
-    for (const s of [-1, 1]) add(new THREE.SphereGeometry(0.065, 20, 14), black, [s * 0.24, 0.2, 0]); // shoulders
-  } else if (n === "pelvis") {
-    add(new RoundedBoxGeometry(0.34, 0.2, 0.22, 4, 0.05), black);
-    add(new THREE.CylinderGeometry(0.075, 0.075, 0.2, 18), black, [0, 0.12, 0]); // spine
-    for (const s of [-1, 1]) add(new THREE.SphereGeometry(0.07, 18, 12), black, [s * 0.1, -0.1, 0]); // hips
-  } else {
-    const len = def.h[1] * 2, r = def.h[0];
-    add(new THREE.CapsuleGeometry(r, len - r * 2, 6, 16), yellow);
-    add(new THREE.CylinderGeometry(r * 1.06, r * 1.06, 0.025, 16), black, [0, len * 0.18, 0]); // band
-    add(new THREE.SphereGeometry(r * 1.05, 14, 10), black, [0, -len / 2, 0]); // joint
-    if (n.startsWith("lLeg")) add(new RoundedBoxGeometry(0.11, 0.07, 0.24, 2, 0.02), black, [0, -len / 2 - 0.03, -0.05]); // foot
-    if (n.startsWith("lArm")) add(new THREE.SphereGeometry(r * 1.15, 14, 10), yellow, [0, -len / 2 - 0.03, 0]); // hand
-  }
-  return g;
-}
+const SEG_BY_BONE = {};
+for (const s of SEGS) SEG_BY_BONE[BN(s.a)] = s.n;
+const ONE = new THREE.Vector3(1, 1, 1), TINY = new THREE.Vector3(1e-4, 1e-4, 1e-4);
+const toV3 = v => new THREE.Vector3(v.x, v.y, v.z);
+const toQ = q => new THREE.Quaternion(q.x, q.y, q.z, q.w);
 
 const dummies = [];
 const partByMesh = new Map();
 const dummyMeshes = [];
 
 class Dummy {
-  constructor(x, z, yaw = 0) {
-    this.parts = {}; this.joints = {}; this.active = false; this.bleeders = []; this.dead = false;
-    const q = new CANNON.Quaternion().setFromEuler(0, yaw, 0);
-    const base = new CANNON.Vec3(x, 0, z);
-    for (const def of PARTS) {
-      const shape = def.r ? new CANNON.Sphere(def.r) : new CANNON.Box(new CANNON.Vec3(...def.h));
-      const body = new CANNON.Body({ mass: def.m, material: fleshMat, type: CANNON.Body.KINEMATIC, linearDamping: 0.05, angularDamping: 0.35 });
-      body.addShape(shape);
-      body.position.copy(base.vadd(q.vmult(new CANNON.Vec3(...def.c))));
-      body.quaternion.copy(q);
-      body.sleepSpeedLimit = 0.2; body.sleepTimeLimit = 0.8;
-      world.addBody(body);
-      const mesh = partMesh(def);
-      scene.add(mesh);
-      mesh.traverse(o => { if (o.isMesh) { partByMesh.set(o, { dummy: this, name: def.n }); dummyMeshes.push(o); } });
-      this.parts[def.n] = { def, body, mesh, hp: def.hp, attached: true, wounds: 0 };
-    }
-    for (const def of PARTS) {
-      if (!def.p) continue;
-      const A = this.parts[def.p].body, B = this.parts[def.n].body;
-      const pivot = base.vadd(q.vmult(new CANNON.Vec3(...def.j)));
-      const axis = new CANNON.Vec3(...def.axis);
-      const c = new CANNON.ConeTwistConstraint(A, B, {
-        pivotA: A.quaternion.inverse().vmult(pivot.vsub(A.position)),
-        pivotB: B.quaternion.inverse().vmult(pivot.vsub(B.position)),
-        axisA: axis, axisB: axis, angle: def.a, twistAngle: def.t, collideConnected: false,
-      });
-      world.addConstraint(c);
-      this.joints[def.n] = c;
-    }
-    this.sync();
+  constructor(kind, x, z, yaw = 0) {
+    const g = MODELS[kind];
+    this.kind = kind;
+    this.root = SkeletonUtils.clone(g.scene);
+    this.root.position.set(x, 0, z);
+    this.root.rotation.y = yaw;
+    this.prepare(this.root);
+    scene.add(this.root);
+    this.mixer = new THREE.AnimationMixer(this.root);
+    const clip = g.animations.find(a => /idle/i.test(a.name)) || g.animations[0];
+    if (clip) this.mixer.clipAction(clip).play();
+    this.mixer.update(Math.random() * 3);
+    this.active = false; this.dead = false;
+    this.parts = {}; this.joints = {}; this.bleeders = []; this.views = []; this.extra = [];
     dummies.push(this);
   }
+  prepare(obj) {
+    obj.traverse(o => {
+      if (!o.isMesh) return;
+      o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false;
+      if (o.isSkinnedMesh) { partByMesh.set(o, { dummy: this }); dummyMeshes.push(o); }
+    });
+  }
+  // the first hit freezes the animated pose into physics bodies
   activate() {
     if (this.active) return;
     this.active = true;
-    for (const k in this.parts) { const b = this.parts[k].body; b.type = CANNON.Body.DYNAMIC; b.updateMassProperties(); b.wakeUp(); }
-  }
-  sync() {
-    for (const k in this.parts) {
-      const { body, mesh } = this.parts[k];
-      mesh.position.copy(body.position); mesh.quaternion.copy(body.quaternion);
+    this.mixer.stopAllAction();
+    this.root.updateMatrixWorld(true);
+    const bones = {};
+    this.root.traverse(o => { if (o.isBone) bones[o.name] = o; });
+    const wp = n => {
+      const o = bones[BN(n)] || this.root.getObjectByName(BN(n));
+      if (o) return o.getWorldPosition(new THREE.Vector3());
+      // some rigs have no head-tip marker: extend the neck-to-head line instead
+      const head = bones[BN("Head")].getWorldPosition(new THREE.Vector3());
+      const neck = bones[BN("Neck")].getWorldPosition(new THREE.Vector3());
+      return head.clone().add(head.clone().sub(neck).normalize().multiplyScalar(0.22));
+    };
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.root.quaternion);
+    for (const s of SEGS) {
+      const a = wp(s.a), b = wp(s.b);
+      const dir = b.clone().sub(a);
+      let len = dir.length(); dir.normalize();
+      if (s.ext) { b.addScaledVector(dir, s.ext); len += s.ext; }
+      const x = right.clone().addScaledVector(dir, -right.dot(dir));
+      if (x.lengthSq() < 1e-4) x.set(0, 0, 1).addScaledVector(dir, -dir.z);
+      x.normalize();
+      const z = new THREE.Vector3().crossVectors(x, dir);
+      const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, dir, z));
+      const center = a.clone().add(b).multiplyScalar(0.5);
+      const shape = s.r ? new CANNON.Sphere(s.r) : new CANNON.Box(new CANNON.Vec3(s.w[0], Math.max(len / 2, 0.05), s.w[1]));
+      const body = new CANNON.Body({ mass: s.m, material: fleshMat, linearDamping: 0.05, angularDamping: 0.4, collisionFilterGroup: 2, collisionFilterMask: 1 });
+      body.addShape(shape);
+      body.position.set(center.x, center.y, center.z);
+      body.quaternion.set(q.x, q.y, q.z, q.w);
+      body.sleepSpeedLimit = 0.2; body.sleepTimeLimit = 0.8;
+      world.addBody(body);
+      const group = new THREE.Group(); scene.add(group);
+      this.parts[s.n] = { def: s, body, group, hp: s.hp, wounds: 0, attached: true, start: a, dir, half: len / 2 };
     }
+    const local = (body, v) => body.quaternion.inverse().vmult(new CANNON.Vec3(v.x, v.y, v.z));
+    for (const s of SEGS) {
+      if (!s.p) continue;
+      const A = this.parts[s.p].body, B = this.parts[s.n].body;
+      const pivot = this.parts[s.n].start, dir = this.parts[s.n].dir;
+      const c = new CANNON.ConeTwistConstraint(A, B, {
+        pivotA: local(A, pivot.clone().sub(A.position)), pivotB: local(B, pivot.clone().sub(B.position)),
+        axisA: local(A, dir), axisB: local(B, dir), angle: s.ang, twistAngle: s.tw, collideConnected: false,
+      });
+      world.addConstraint(c);
+      this.joints[s.n] = c;
+    }
+    // every bone rides rigidly on the body of the nearest ragdoll bone above it
+    this.offsets = {};
+    for (const name in bones) {
+      let b = bones[name];
+      while (b && !(b.isBone && SEG_BY_BONE[b.name])) b = b.parent;
+      const owner = b ? SEG_BY_BONE[b.name] : "pelvis";
+      const body = this.parts[owner].body;
+      const bodyM = new THREE.Matrix4().compose(toV3(body.position), toQ(body.quaternion), ONE);
+      this.offsets[name] = { owner, offset: bodyM.invert().multiply(bones[name].matrixWorld) };
+    }
+    this.views.push(this.makeView(this.root, null));
   }
-  // cut a part (and everything below it) away from its parent
+  makeView(obj, pieceRoot) {
+    const entries = [];
+    obj.traverse(o => { if (o.isBone && this.offsets[o.name]) entries.push({ bone: o, ...this.offsets[o.name] }); });
+    return { obj, pieceRoot, entries };
+  }
+  severedRoot(name) {
+    for (let p = name; p; p = this.parts[p].def.p) if (!this.parts[p].attached) return p;
+    return null;
+  }
+  isBelow(name, root) {
+    for (let p = name; p; p = this.parts[p].def.p) if (p === root) return true;
+    return false;
+  }
+  pivot(name, side) {
+    const c = this.joints[name];
+    const body = side === "A" ? this.parts[this.parts[name].def.p].body : this.parts[name].body;
+    const w = body.quaternion.vmult(side === "A" ? c.pivotA : c.pivotB).vadd(body.position);
+    return toV3(w);
+  }
+  nearestPart(point) {
+    let best = "chest", bestD = Infinity;
+    for (const k in this.parts) {
+      const { body, half, def } = this.parts[k];
+      const axis = new THREE.Vector3(0, 1, 0).applyQuaternion(toQ(body.quaternion));
+      const rel = point.clone().sub(toV3(body.position));
+      const t = THREE.MathUtils.clamp(rel.dot(axis), -half, half);
+      let d = rel.addScaledVector(axis, -t).length() - (def.r || def.w[0]);
+      if (k === "head") d -= 0.03;
+      if (d < bestD) { bestD = d; best = k; }
+    }
+    return best;
+  }
   sever(name) {
     const part = this.parts[name];
     if (!part.attached || !this.joints[name]) return;
+    const at = this.pivot(name, "A");
     part.attached = false;
     world.removeConstraint(this.joints[name]);
+    // the cut-off piece is a second copy of the same skinned mesh that only shows this limb
+    const piece = SkeletonUtils.clone(MODELS[this.kind].scene);
+    this.prepare(piece); scene.add(piece);
+    this.views.push(this.makeView(piece, name));
+    this.extra.push(piece);
     const parent = this.parts[part.def.p];
-    const pivotWorld = new THREE.Vector3(...part.def.j);
-    // stump caps on both sides of the cut
-    const capOn = (p, outward) => {
-      const local = p.mesh.worldToLocal(new THREE.Vector3().copy(this.worldPivot(name)));
-      const cap = new THREE.Mesh(new THREE.CircleGeometry(name === "head" ? 0.055 : p.def.h ? Math.max(p.def.h[0], 0.05) : 0.06, 18), fleshMatVis);
-      cap.position.copy(local);
-      cap.lookAt(local.clone().add(outward));
-      p.mesh.add(cap);
-      const bone = new THREE.Mesh(new THREE.CircleGeometry(0.015, 10), boneMat);
-      bone.position.copy(local).addScaledVector(outward, 0.002); bone.lookAt(local.clone().add(outward).addScaledVector(outward, 1));
-      p.mesh.add(bone);
-      return local;
+    const cap = (p, worldPoint, outward) => {
+      p.group.updateMatrixWorld(true);
+      const localPt = p.group.worldToLocal(worldPoint.clone());
+      const r = name === "head" ? 0.06 : Math.max(p.def.r || p.def.w[0], 0.05);
+      const disc = new THREE.Mesh(new THREE.CircleGeometry(r, 18), fleshMatVis);
+      disc.position.copy(localPt); disc.lookAt(localPt.clone().add(outward)); p.group.add(disc);
+      const bone = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.05, 8), boneMat);
+      bone.position.copy(localPt).addScaledVector(outward, 0.015); bone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), outward); p.group.add(bone);
+      return localPt;
     };
-    const stumpLocal = capOn(parent, this.localAxis(parent, name, 1));
-    const limbLocal = capOn(part, this.localAxis(part, name, -1));
-    this.bleeders.push({ part: parent, local: stumpLocal, dir: this.localAxis(parent, name, 1), t: 0, dur: name === "head" ? 5 : 3.5, rate: name === "head" ? 340 : 220 });
-    this.bleeders.push({ part, local: limbLocal, dir: this.localAxis(part, name, -1), t: 0, dur: 2.2, rate: 140 });
-    // a burst of gore at the cut
-    const at = this.worldPivot(name);
+    const c = this.joints[name];
+    const outParent = toV3(c.axisA).normalize(), outPiece = toV3(c.axisB).normalize().negate();
+    const stump = cap(parent, at, outParent);
+    const end = cap(part, this.pivot(name, "B"), outPiece);
+    this.bleeders.push({ part: parent, local: stump, dir: outParent, t: 0, dur: name === "head" ? 5 : 3.5, rate: name === "head" ? 340 : 220 });
+    this.bleeders.push({ part, local: end, dir: outPiece, t: 0, dur: 2.2, rate: 140 });
     bloodBurst(at, new THREE.Vector3(0, 1, 0), 160, 3.5, 1.8);
     bloodMist(at, 1.6);
     for (let i = 0; i < 10; i++) spawnChunk(at);
-    void pivotWorld;
-  }
-  worldPivot(name) {
-    const part = this.parts[name];
-    const c = this.joints[name];
-    const b = part.body;
-    const w = b.quaternion.vmult(c.pivotB).vadd(b.position);
-    return new THREE.Vector3(w.x, w.y, w.z);
-  }
-  // direction (in the given part's local frame) pointing out of the cut
-  localAxis(p, name, sign) {
-    const c = this.joints[name];
-    const ax = p === this.parts[name] ? c.axisB : c.axisA;
-    return new THREE.Vector3(ax.x, ax.y, ax.z).multiplyScalar(p === this.parts[name] ? -1 : 1).multiplyScalar(sign > 0 ? 1 : 1);
   }
   remove() {
-    for (const k in this.parts) {
-      const { body, mesh } = this.parts[k];
-      world.removeBody(body); scene.remove(mesh);
-      mesh.traverse(o => { if (o.isMesh) { partByMesh.delete(o); const i = dummyMeshes.indexOf(o); if (i >= 0) dummyMeshes.splice(i, 1); } });
-    }
+    scene.remove(this.root);
+    for (const e of this.extra) scene.remove(e);
+    for (const k in this.parts) { world.removeBody(this.parts[k].body); scene.remove(this.parts[k].group); }
     for (const k in this.joints) world.removeConstraint(this.joints[k]);
+    for (const [m, info] of [...partByMesh]) if (info.dummy === this) { partByMesh.delete(m); const i = dummyMeshes.indexOf(m); if (i >= 0) dummyMeshes.splice(i, 1); }
     dummies.splice(dummies.indexOf(this), 1);
   }
   update(dt) {
-    this.sync();
+    if (!this.active) { this.mixer.update(dt); return; }
+    for (const k in this.parts) {
+      const { body, group } = this.parts[k];
+      group.position.copy(body.position); group.quaternion.copy(body.quaternion);
+    }
     for (let i = this.bleeders.length - 1; i >= 0; i--) {
       const b = this.bleeders[i];
       b.t += dt;
       if (b.t > b.dur) { this.bleeders.splice(i, 1); continue; }
       const strength = 1 - b.t / b.dur;
-      const at = b.part.mesh.localToWorld(b.local.clone());
-      const dir = b.dir.clone().applyQuaternion(b.part.mesh.quaternion);
+      b.part.group.updateMatrixWorld(true);
+      const at = b.part.group.localToWorld(b.local.clone());
+      const dir = b.dir.clone().applyQuaternion(b.part.group.quaternion);
       const n = Math.floor(b.rate * dt * strength + Math.random());
       for (let k = 0; k < n; k++) {
         const v = dir.clone().multiplyScalar(rand(1.2, 3.2) * (0.4 + strength * pulse(b.t)));
@@ -540,7 +582,6 @@ class Dummy {
         spawnParticle(at, v, true, Math.random() < .5 ? BLOOD_COLOR : BLOOD_BRIGHT, rand(0.6, 1.6), Math.random() < 0.12 ? 1 : 0);
       }
     }
-    // wounded parts lying on the floor slowly pool blood
     for (const k in this.parts) {
       const p = this.parts[k];
       if (p.wounds > 0 && p.body.position.y < 0.3 && p.body.velocity.length() < 0.4 && Math.random() < dt * 1.5) {
@@ -548,7 +589,26 @@ class Dummy {
       }
     }
   }
+  // after the scene's matrices are updated: drive every bone of every view from the physics bodies
+  pose() {
+    if (!this.active) return;
+    const bodyM = {};
+    for (const k in this.parts) bodyM[k] = new THREE.Matrix4().compose(toV3(this.parts[k].body.position), toQ(this.parts[k].body.quaternion), ONE);
+    for (const view of this.views) {
+      for (const e of view.entries) {
+        const sr = this.severedRoot(e.owner);
+        const visible = view.pieceRoot ? sr === view.pieceRoot : sr === null;
+        if (visible) { e.bone.matrixWorld.multiplyMatrices(bodyM[e.owner], e.offset); continue; }
+        let cut;
+        if (!view.pieceRoot) cut = this.pivot(sr, "A");
+        else if (sr && sr !== view.pieceRoot && this.isBelow(sr, view.pieceRoot)) cut = this.pivot(sr, "A");
+        else cut = this.pivot(view.pieceRoot, "B");
+        e.bone.matrixWorld.compose(cut, new THREE.Quaternion(), TINY);
+      }
+    }
+  }
 }
+
 const pulse = t => 0.65 + 0.35 * Math.max(0, Math.sin(t * 9)); // arterial spurts
 
 // gore chunks: little lumps of flesh that bounce and leave a smear
@@ -750,6 +810,7 @@ function tryShoot() {
   const spread = (aiming ? 0.25 : 1) * (current.def.spread + gs.spread);
   const dir = new THREE.Vector3(rand(-spread, spread), rand(-spread, spread), -1).normalize().applyQuaternion(camera.quaternion);
   const origin = camera.getWorldPosition(new THREE.Vector3());
+  for (const m of dummyMeshes) { m.boundingSphere = null; m.boundingBox = null; }
   raycaster.set(origin, dir); raycaster.far = 80;
   const hit = raycaster.intersectObjects([...dummyMeshes, ...worldMeshes], false)[0];
   tracer(origin, dir, hit ? hit.distance : 60);
@@ -766,9 +827,10 @@ function hitWorld(hit) {
 }
 
 function hitDummy(info, hit, dir) {
-  const { dummy, name } = info;
-  const part = dummy.parts[name];
+  const { dummy } = info;
   dummy.activate();
+  const name = dummy.nearestPart(hit.point);
+  const part = dummy.parts[name];
   hits++;
   const head = name === "head";
   const dmg = current.def.damage * (head ? 2.2 : 1) * rand(0.9, 1.1);
@@ -780,10 +842,11 @@ function hitDummy(info, hit, dir) {
   // wound decal on the part
   const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
   const wound = new THREE.Mesh(new THREE.CircleGeometry(rand(0.018, 0.026), 14), new THREE.MeshStandardMaterial({ map: bloodTextures[0], color: 0x5a0000, transparent: true, roughness: 0.2, polygonOffset: true, polygonOffsetFactor: -2 }));
-  const local = part.mesh.worldToLocal(hit.point.clone().addScaledVector(n, 0.003));
+  part.group.updateMatrixWorld(true);
+  const local = part.group.worldToLocal(hit.point.clone().addScaledVector(n, 0.003));
   wound.position.copy(local);
-  wound.lookAt(part.mesh.worldToLocal(hit.point.clone().add(n)));
-  part.mesh.add(wound);
+  wound.lookAt(part.group.worldToLocal(hit.point.clone().add(n)));
+  part.group.add(wound);
   // entry spray back toward the shooter, exit spray out the back
   bloodBurst(hit.point, n, head ? 90 : 45, 2.2, 0.9);
   bloodBurst(hit.point, dir, head ? 120 : 60, 5.5, 0.7);
@@ -839,7 +902,7 @@ function spawnDummyInFront() {
   const p = player.pos.clone().addScaledVector(fwd, 4);
   p.x = Math.max(ROOM.minX + 1, Math.min(ROOM.maxX - 1, p.x));
   p.z = Math.max(ROOM.minZ + 1, Math.min(ROOM.maxZ - 1, p.z));
-  new Dummy(p.x, p.z, player.yaw + Math.PI); // facing the player
+  new Dummy(nextKind(), p.x, p.z, player.yaw); // facing the player
   if (dummies.length > 6) dummies[0].remove();
 }
 function cleanUp() {
@@ -850,9 +913,17 @@ function cleanUp() {
   for (const s of shells) scene.remove(s); shells.length = 0;
   for (const m of droppedMags) scene.remove(m); droppedMags.length = 0;
   for (const p of P) p.alive = false;
-  new Dummy(-1.4, -3.5, Math.PI); new Dummy(1.4, -3.5, Math.PI);
+  spawnStart();
 }
-new Dummy(-1.4, -3.5, Math.PI); new Dummy(1.4, -3.5, Math.PI); new Dummy(0, -7.5, Math.PI);
+let kindIndex = 0;
+function nextKind() { return ["soldier", "xbot"][kindIndex++ % 2]; }
+function spawnStart() { new Dummy("soldier", -1.4, -3.5, 0); new Dummy("xbot", 1.4, -3.5, 0); new Dummy("soldier", 0, -7.5, 0); }
+const loadingEl = document.getElementById("loading");
+if (location.protocol === "file:") {
+  loadingEl.textContent = "Open this through the local server: double-click start.bat (Windows) or run start.sh";
+} else {
+  loadModels().then(() => { spawnStart(); loadingEl.textContent = ""; }).catch(e => { loadingEl.textContent = "Couldn't load the models: " + e.message; });
+}
 
 // ---------------------------------------------------------------- main loop
 const clock = new THREE.Clock();
@@ -1023,6 +1094,8 @@ function step() {
   const acc = shotsFired ? Math.round(hits / shotsFired * 100) : 0;
   statsEl.innerHTML = `SHOTS ${shotsFired} &nbsp; ACCURACY ${acc}%<br>HEADSHOTS ${headshots} &nbsp; LIMBS ${severed}`;
 
+  scene.updateMatrixWorld();
+  for (const dm of dummies) dm.pose();
   renderer.render(scene, camera);
 }
 updateAmmoUI();
