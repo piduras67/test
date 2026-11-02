@@ -130,6 +130,33 @@ for (const t of [plateColor, plateRough]) t.repeat.set(100, 100);
 const plate = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.MeshStandardMaterial({ map: plateColor, roughnessMap: plateRough, roughness: 1, metalness: 0 }));
 plate.rotation.x = -Math.PI / 2;
 plate.receiveShadow = true;
+
+// a few walls and crates: things for blood to hit and run down, and for bodies to fall against
+const props = [];
+const concreteTex = canvasTex(256, (g, n) => {
+  g.fillStyle = "#9a9993"; g.fillRect(0, 0, n, n);
+  for (let i = 0; i < 9000; i++) { const v = rand(120, 175) | 0; g.fillStyle = `rgba(${v},${v},${v - 4},0.25)`; g.fillRect(rand(0, n), rand(0, n), 2, 2); }
+  g.strokeStyle = "rgba(60,60,58,0.35)"; g.lineWidth = 2; g.strokeRect(1, 1, n - 2, n - 2);
+});
+concreteTex.colorSpace = THREE.SRGBColorSpace;
+const crateTex = canvasTex(256, (g, n) => {
+  g.fillStyle = "#8a6a43"; g.fillRect(0, 0, n, n);
+  for (let y = 0; y < n; y += 32) { g.fillStyle = `rgba(0,0,0,${rand(0.05, 0.15)})`; g.fillRect(0, y, n, 30); g.fillStyle = "rgba(40,25,10,0.5)"; g.fillRect(0, y + 30, n, 2); }
+  g.strokeStyle = "#4a3520"; g.lineWidth = 14; g.strokeRect(7, 7, n - 14, n - 14);
+  g.beginPath(); g.moveTo(10, 10); g.lineTo(n - 10, n - 10); g.stroke();
+});
+crateTex.colorSpace = THREE.SRGBColorSpace;
+function addProp(w, h, d, x, z, rotY, tex, repeat) {
+  const t = tex.clone(); t.needsUpdate = true; t.repeat.set(repeat ? w / 2 : 1, repeat ? h / 2 : 1);
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshStandardMaterial({ map: t, roughness: 0.9 }));
+  m.position.set(x, h / 2, z); m.rotation.y = rotY;
+  m.castShadow = true; m.receiveShadow = true;
+  scene.add(m); m.updateMatrixWorld(true);
+  const body = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(w / 2, h / 2, d / 2)) });
+  body.position.set(x, h / 2, z); body.quaternion.setFromEuler(0, rotY, 0);
+  props.push({ mesh: m, body, half: new THREE.Vector3(w / 2, h / 2, d / 2), inv: m.matrixWorld.clone().invert() });
+  return body;
+}
 scene.add(plate);
 
 // ================================================================ post-processing
@@ -253,12 +280,17 @@ world.addContactMaterial(new CANNON.ContactMaterial(groundMat, fleshMat, { frict
 const ground = new CANNON.Body({ mass: 0, material: groundMat, shape: new CANNON.Plane() });
 ground.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
 world.addBody(ground);
+for (const [w, h, d, x, z, r, kind] of [
+  [6, 3, 0.4, 0, -9, 0, "wall"], [0.4, 3, 4, -4.2, -6.5, 0.15, "wall"],
+  [1, 1, 1, 2.6, -6.2, 0.3, "crate"], [0.8, 0.8, 0.8, 3.4, -5.4, -0.2, "crate"], [1, 1, 1, 2.9, -6.0, 0.6, "crate"],
+]) world.addBody(addProp(w, h, d, x, z, r, kind === "wall" ? concreteTex : crateTex, kind === "wall"));
+props[4].mesh.position.y += 1; props[4].body.position.y += 1; props[4].mesh.updateMatrixWorld(true); props[4].inv = props[4].mesh.matrixWorld.clone().invert(); // a crate stacked on another
 
 // ================================================================ 3D blood
 // pixel-style blood: every drop is a little cube in one of a few flat reds, no gloss, no smoothing
 const PIXEL_REDS = ["#3d0404", "#5e0707", "#86100c", "#a8170f"];
 const PIXEL_COLORS = PIXEL_REDS.map(c => new THREE.Color(c));
-const bloodMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+const bloodMat = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x2a0202 });
 const MAX_DROPS = 4500;
 const dropMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1.6, 1.6, 1.6), bloodMat, MAX_DROPS);
 for (let i = 0; i < MAX_DROPS; i++) dropMesh.setColorAt(i, PIXEL_COLORS[i % PIXEL_COLORS.length]);
@@ -303,7 +335,7 @@ function splatTexture() {
   t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestFilter; t.generateMipmaps = false;
   return t;
 }
-const splatMats = [0, 1, 2, 3, 4, 5].map(() => new THREE.MeshLambertMaterial({ map: splatTexture(), transparent: true, alphaTest: 0.5, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }));
+const splatMats = [0, 1, 2, 3, 4, 5].map(() => new THREE.MeshBasicMaterial({ map: splatTexture(), transparent: true, alphaTest: 0.5, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, color: 0xd8d8d8 }));
 const splatGeo = new THREE.PlaneGeometry(1, 1); splatGeo.rotateX(-Math.PI / 2);
 const splats = [];
 function splat(x, z, size, stretchDir) {
@@ -315,8 +347,49 @@ function splat(x, z, size, stretchDir) {
   scene.add(m); splats.push(m);
   if (splats.length > 350) scene.remove(splats.shift());
 }
+// a pixel splat stuck to a prop's face; on a vertical face the blood also runs down in a pixel streak
+const runs = [];
+const runTex = (() => {
+  const c = document.createElement("canvas"); c.width = 4; c.height = 32; const g = c.getContext("2d");
+  for (let y = 0; y < 32; y++) { const w = y < 28 ? 2 : 3; g.fillStyle = PIXEL_REDS[y < 4 ? 2 : y < 26 ? 1 : 0]; g.fillRect(2 - Math.floor(w / 2), y, w, 1); }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.magFilter = t.minFilter = THREE.NearestFilter; t.generateMipmaps = false; return t;
+})();
+const runMat = new THREE.MeshBasicMaterial({ color: 0xd8d8d8, map: runTex, transparent: true, alphaTest: 0.5, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -5 });
+function surfaceSplat(point, normal, size) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(size, size), splatMats[(Math.random() * splatMats.length) | 0]);
+  m.position.copy(point).addScaledVector(normal, 0.004);
+  m.lookAt(point.clone().add(normal));
+  m.rotateZ(((Math.random() * 4) | 0) * Math.PI / 2);
+  scene.add(m); splats.push(m);
+  if (splats.length > 350) scene.remove(splats.shift());
+  if (Math.abs(normal.y) < 0.3 && size > 0.06 && Math.random() < 0.7) {
+    const geo = new THREE.PlaneGeometry(size * 0.18, 1); geo.translate(0, -0.5, 0);
+    const r = new THREE.Mesh(geo, runMat);
+    r.position.copy(point).addScaledVector(normal, 0.005);
+    r.lookAt(r.position.clone().add(normal));
+    r.scale.y = 0.001;
+    r.userData = { len: Math.min(point.y - 0.02, rand(0.15, 0.7) * (size * 6)), speed: rand(0.03, 0.08) };
+    scene.add(r); runs.push(r);
+    if (runs.length > 80) scene.remove(runs.shift());
+  }
+}
+// which prop face (if any) a point is inside, and that face's outward normal
+function propHit(p, prev) {
+  for (const pr of props) {
+    const l = p.clone().applyMatrix4(pr.inv), h = pr.half;
+    if (Math.abs(l.x) > h.x || Math.abs(l.y) > h.y || Math.abs(l.z) > h.z) continue;
+    const lp = prev.clone().applyMatrix4(pr.inv);
+    const n = new THREE.Vector3();
+    if (Math.abs(lp.y) > h.y) n.set(0, Math.sign(lp.y), 0);
+    else if (Math.abs(lp.x) > h.x) n.set(Math.sign(lp.x), 0, 0);
+    else n.set(0, 0, Math.sign(lp.z) || 1);
+    const surface = l.clone(); if (n.x) surface.x = h.x * n.x; if (n.y) surface.y = h.y * n.y; if (n.z) surface.z = h.z * n.z;
+    return { point: surface.applyMatrix4(pr.mesh.matrixWorld), normal: n.transformDirection(pr.mesh.matrixWorld) };
+  }
+  return null;
+}
 const STAIN_GEO = new THREE.CircleGeometry(1, 28);
-const woundMat = new THREE.MeshLambertMaterial({ map: splatTexture(), transparent: true, alphaTest: 0.5, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4 });
+const woundMat = new THREE.MeshBasicMaterial({ color: 0xd8d8d8, map: splatTexture(), transparent: true, alphaTest: 0.5, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4 });
 function poolGeometry(seed) {
   const shape = new THREE.Shape(), n = 64;
   for (let i = 0; i <= n; i++) {
@@ -337,7 +410,7 @@ function makeField(x, z) {
   const show = document.createElement("canvas"); show.width = show.height = FIELD_RES;
   const tex = new THREE.CanvasTexture(show); tex.colorSpace = THREE.SRGBColorSpace;
   tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter; tex.generateMipmaps = false;
-  const mat = new THREE.MeshLambertMaterial({ map: tex, transparent: true, alphaTest: 0.5, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3 });
+  const mat = new THREE.MeshBasicMaterial({ color: 0xd8d8d8, map: tex, transparent: true, alphaTest: 0.5, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3 });
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(FIELD_SIZE, FIELD_SIZE), mat);
   mesh.rotation.x = -Math.PI / 2; mesh.position.set(x, 0.0018, z); mesh.receiveShadow = true;
   scene.add(mesh);
@@ -345,6 +418,16 @@ function makeField(x, z) {
   const f = { x, z, draw, dctx: draw.getContext("2d"), show, sctx: show.getContext("2d"), tex, mesh, sources: [], dirty: true, tick: 0, flow: new THREE.Vector2(Math.cos(flow), Math.sin(flow)) };
   fields.push(f);
   return f;
+}
+// is there blood on the floor here? (reads the pool's own pixels)
+function bloodAt(x, z) {
+  for (const f of fields) {
+    const u = (x - f.x + FIELD_SIZE / 2) / FIELD_SIZE, v = (z - f.z + FIELD_SIZE / 2) / FIELD_SIZE;
+    if (u < 0 || u > 1 || v < 0 || v > 1) continue;
+    const px = f.sctx.getImageData(Math.floor(u * FIELD_RES), Math.floor(v * FIELD_RES), 1, 1).data;
+    if (px[3] > 0) return true;
+  }
+  return false;
 }
 function pool(x, z, amount) {
   let f = fields.find(f => Math.abs(x - f.x) < FIELD_SIZE / 2 - 0.6 && Math.abs(z - f.z) < FIELD_SIZE / 2 - 0.6);
@@ -456,6 +539,60 @@ function addRipple(material) {
   material.needsUpdate = true;
 }
 
+// ================================================================ pixel bullet holes
+const holeTex = (() => {
+  const c = document.createElement("canvas"); c.width = c.height = 8; const g = c.getContext("2d");
+  const px = [[3, 2], [4, 2], [2, 3], [3, 3], [4, 3], [5, 3], [2, 4], [3, 4], [4, 4], [5, 4], [3, 5], [4, 5]];
+  g.fillStyle = "#3a3632"; for (const [x, y] of [[2, 1], [5, 1], [1, 2], [6, 2], [1, 5], [6, 5], [2, 6], [5, 6], [3, 1], [6, 4]]) g.fillRect(x, y, 1, 1); // scorched rim
+  g.fillStyle = "#0b0a09"; for (const [x, y] of px) g.fillRect(x, y, 1, 1);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.magFilter = t.minFilter = THREE.NearestFilter; t.generateMipmaps = false; return t;
+})();
+const holeMat = new THREE.MeshLambertMaterial({ map: holeTex, transparent: true, alphaTest: 0.5, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -6 });
+const holeGeo = new THREE.PlaneGeometry(1, 1);
+function bulletHole(point, normal, size, parent) {
+  const m = new THREE.Mesh(holeGeo, holeMat);
+  m.scale.setScalar(size);
+  m.position.copy(point).addScaledVector(normal, 0.005);
+  m.lookAt(point.clone().add(normal));
+  if (parent) { parent.updateMatrixWorld(true); parent.attach(m); } else scene.add(m);
+  return m;
+}
+
+// ================================================================ pixel gibs
+const gibGeo = new THREE.BoxGeometry(1, 1, 1);
+const gibMats = ["#3d0404", "#5e0707", "#7d1010", "#b5524a", "#d9c7b0"].map(c => new THREE.MeshLambertMaterial({ color: c, emissive: new THREE.Color(c).multiplyScalar(0.25) }));
+const gibs = [];
+function pixelGibs(point, dir, count) {
+  for (let i = 0; i < count; i++) {
+    const m = new THREE.Mesh(gibGeo, gibMats[Math.random() < 0.12 ? 4 : (Math.random() * 4) | 0]); // a little bone-white now and then
+    const size = Math.round(rand(2, 6)) * 0.008;                                                          // sizes on a pixel grid
+    m.scale.setScalar(size); m.position.copy(point); m.castShadow = true;
+    m.userData = { v: dir.clone().multiplyScalar(rand(1.5, 4.5)).add(new THREE.Vector3(rand(-1.6, 1.6), rand(0.8, 3.2), rand(-1.6, 1.6))), spin: new THREE.Vector3(rand(-14, 14), rand(-14, 14), rand(-14, 14)), size, landed: false, rest: false, trail: 0 };
+    scene.add(m); gibs.push(m);
+    if (gibs.length > 160) scene.remove(gibs.shift());
+  }
+}
+function updateGibs(dt) {
+  for (const m of gibs) {
+    const u = m.userData; if (u.rest) continue;
+    const prev = m.position.clone();
+    u.v.y -= 9.8 * dt;
+    m.position.addScaledVector(u.v, dt);
+    m.rotation.x += u.spin.x * dt; m.rotation.y += u.spin.y * dt; m.rotation.z += u.spin.z * dt;
+    u.trail -= dt;
+    if (u.trail <= 0) { u.trail = 0.03; drop(m.position, new THREE.Vector3(0, -0.3, 0), 0.004); } // gibs drip as they fly
+    const ph = propHit(m.position, prev);
+    if (ph) { m.position.copy(ph.point).addScaledVector(ph.normal, u.size); u.v.reflect(ph.normal).multiplyScalar(0.3); surfaceSplat(ph.point, ph.normal, u.size * 5); Sound.drip(m.position); }
+    if (m.position.y < u.size / 2) {
+      m.position.y = u.size / 2;
+      if (!u.landed || Math.abs(u.v.y) > 1) { splat(m.position.x, m.position.z, u.size * rand(5, 8)); if (Math.abs(u.v.y) > 1.2) Sound.drip(m.position); }
+      u.landed = true;
+      u.v.y = -u.v.y * 0.3; u.v.x *= 0.55; u.v.z *= 0.55; u.spin.multiplyScalar(0.5);
+      if (Math.abs(u.v.y) < 0.4 && Math.hypot(u.v.x, u.v.z) < 0.3) { u.rest = true; m.rotation.set(0, ((Math.random() * 4) | 0) * Math.PI / 2, 0); }
+    }
+  }
+}
+
 // ================================================================ dust and smoke
 const smokeTex = (() => {
   const c = document.createElement("canvas"); c.width = c.height = 128; const g = c.getContext("2d");
@@ -472,8 +609,8 @@ function dust(pos, amount, color = 0xb5ada2) {
   for (let i = 0; i < amount; i++) {
     const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTex, color, transparent: true, depthWrite: false, opacity: 0, rotation: rand(0, 6.28) }));
     s.position.copy(pos).add(new THREE.Vector3(rand(-0.15, 0.15), rand(0, 0.08), rand(-0.15, 0.15)));
-    const a = rand(0, Math.PI * 2), sp = rand(0.25, 0.9);
-    s.userData = { t: 0, life: rand(1.2, 2.2), v: new THREE.Vector3(Math.cos(a) * sp, rand(0.05, 0.25), Math.sin(a) * sp), size: rand(0.22, 0.45), spin: rand(-0.4, 0.4) };
+    const a = rand(0, Math.PI * 2), sp = rand(0.35, 1.2);
+    s.userData = { t: 0, life: rand(1.8, 3.2), v: new THREE.Vector3(Math.cos(a) * sp, rand(0.08, 0.35), Math.sin(a) * sp), size: rand(0.35, 0.75), spin: rand(-0.4, 0.4) };
     scene.add(s); puffs.push(s);
   }
 }
@@ -623,6 +760,7 @@ class Soldier {
     const R = this.bodyRegion(point, dir);
     if (this.frozen) { this.frozen = false; for (const k in this.parts) { this.parts[k].still = 0; this.parts[k].body.wakeUp(); } }
     const neck = R.mode === "neck", head = R.mode === "head";
+    this.lastHitHead = head;
     if (this.state === "idle") this.becomeRagdoll(point, dir, !head, neck);
     const region = this.nearestPart(point);
     const part = this.parts[region];
@@ -634,6 +772,7 @@ class Soldier {
     const wound = new THREE.Object3D();
     wound.position.copy(part.group.worldToLocal(point.clone().addScaledVector(normal, 0.01)));
     wound.quaternion.copy(part.group.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(new THREE.Quaternion().setFromUnitVectors(UPV, normal)));
+    bulletHole(point, normal, 0.032, part.group); // a pixel hole punched in his gear
     const stain = new THREE.Mesh(STAIN_GEO, woundMat);
     stain.rotation.x = -Math.PI / 2; stain.position.y = 0.002;
     stain.scale.setScalar(rand(0.025, 0.035));
@@ -916,10 +1055,20 @@ class Soldier {
     const p = toV(body.position); p.y = 0.03;
     const heavy = body.mass >= 7;
     const torso = body === this.parts.chest.body || body === this.parts.pelvis.body;
-    if (torso && !this.slumped && v > 1) { this.slumped = true; Sound.slump(p); }
+    if (torso && !this.slumped && v > 1) {
+      this.slumped = true; Sound.slump(p);
+      // a ring of dust pushed out from under the body
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * Math.PI * 2 + rand(-0.2, 0.2);
+        const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTex, color: 0xb9b1a5, transparent: true, depthWrite: false, opacity: 0, rotation: rand(0, 6.28) }));
+        sp.position.copy(p).add(new THREE.Vector3(Math.cos(a) * 0.25, 0.05, Math.sin(a) * 0.25));
+        sp.userData = { t: 0, life: rand(1.8, 2.8), v: new THREE.Vector3(Math.cos(a) * rand(1.2, 2), rand(0.05, 0.2), Math.sin(a) * rand(1.2, 2)), size: rand(0.4, 0.7), spin: rand(-0.5, 0.5) };
+        scene.add(sp); puffs.push(sp);
+      }
+    }
     else Sound.thud(p, v * body.mass / 7);
     if (v > 1) Sound.gear(p, Math.min(1.2, v / 3));
-    if (heavy && v > 1.2) dust(p, v > 2.5 ? 3 : 2);
+    if (v > 0.9) dust(p, heavy ? (v > 2.5 ? 6 : 4) : 2);
   }
   // twist limit done right: measure each part's roll relative to its parent *since the hit* and clamp it.
   // the part rotates about its own joint, so the correction never pulls the joint apart.
@@ -953,7 +1102,17 @@ class Soldier {
     this.limitTwist();
     this.stepBalance(dt);
     this.stepGrip();
-    for (const k in this.parts) { const { body, group } = this.parts[k]; group.position.copy(body.position); group.quaternion.copy(body.quaternion); }
+    for (const k in this.parts) { const { body, group } = this.parts[k]; group.position.copy(body.interpolatedPosition); group.quaternion.copy(body.interpolatedQuaternion); }
+    // a bleeding part dragging along the ground leaves a pixel streak behind it
+    for (const w of this.wounds) {
+      const b = this.parts[w.region] && this.parts[w.region].body; if (!b) continue;
+      const wp = w.obj.getWorldPosition(V());
+      const slide = Math.hypot(b.velocity.x, b.velocity.z);
+      if (wp.y < 0.28 && slide > 0.45) {
+        w.trailDist = (w.trailDist || 0) + slide * dt;
+        if (w.trailDist > 0.05) { w.trailDist = 0; splat(wp.x, wp.z, rand(0.05, 0.09)); if (Math.random() < 0.3) pool(wp.x, wp.z, 0.05); }
+      }
+    }
     if (!this.balance && this.t > 2) {
       // judge stillness by where a part actually goes, not its speed: a part wedged between the body and the
       // floor can vibrate fast while going nowhere, and that is exactly what should be frozen
@@ -994,13 +1153,13 @@ class Soldier {
       while (p && !worldQ.has(p) && p.isBone) { chain.push(p); p = p.parent; }
       if (p && worldQ.has(p)) { parentQ = worldQ.get(p).clone(); for (let i = chain.length - 1; i >= 0; i--) parentQ.multiply(chain[i].quaternion); }
       else parentQ = bone.parent.getWorldQuaternion(pq).clone();
-      const want = toQ(part.body.quaternion);
+      const want = toQ(part.body.interpolatedQuaternion);
       bone.quaternion.copy(parentQ.invert().multiply(want));
       worldQ.set(bone, want);
     }
     const hips = this.bones.Hips, pel = this.parts.pelvis.body;
     hips.parent.updateMatrixWorld(true);
-    hips.position.copy(hips.parent.worldToLocal(toV(pel.position)));
+    hips.position.copy(hips.parent.worldToLocal(toV(pel.interpolatedPosition)));
   }
   bleedTick(dt) {
     for (const b of this.bleed) {
@@ -1148,16 +1307,38 @@ function shoot() {
   raycaster.set(camera.position, dir); raycaster.far = 300;
   const meshes = [...hitMeshes.keys()];
   for (const m of meshes) { m.boundingSphere = null; m.boundingBox = null; }
-  const hit = raycaster.intersectObjects([...meshes, plate], false)[0];
+  const propMeshes = props.map(p => p.mesh);
+  const hit = raycaster.intersectObjects([...meshes, plate, ...propMeshes], false)[0];
   if (!hit) return;
   if (hit.object === plate) {
-    dust(hit.point, 2, 0x9c968c);
+    if (bloodAt(hit.point.x, hit.point.z)) {
+      // a bullet into a pool kicks up a splash of pixel blood
+      spray(hit.point.clone().setY(0.01), new THREE.Vector3(0, 1, 0), 30, 2.2, 0.9, 0.004, 0.011);
+      Sound.drip(hit.point); Sound.drip(hit.point);
+    } else dust(hit.point, 2, 0x9c968c);
+    return;
+  }
+  if (propMeshes.includes(hit.object)) {
+    const pn = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
+    bulletHole(hit.point, pn, 0.03);
+    dust(hit.point, 2, 0xb8b2a8);
     return;
   }
   const s = hitMeshes.get(hit.object);
   let n = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : dir.clone().negate();
   if (n.dot(dir) > 0) n.negate();
   s.hit(hit.point, n, dir);
+  // close shots and headshots throw chunks
+  if (hit.distance < 3.2 || s.lastHitHead) pixelGibs(hit.point, dir, s.lastHitHead ? 22 : 9);
+  // the bullet carries on out the back and spatters whatever is behind him
+  raycaster.set(hit.point.clone().addScaledVector(dir, 0.4), dir); raycaster.far = 6;
+  const behind = raycaster.intersectObjects(propMeshes, false)[0];
+  if (behind) {
+    const bn = behind.face.normal.clone().transformDirection(behind.object.matrixWorld);
+    surfaceSplat(behind.point, bn, rand(0.25, 0.45) * (s.lastHitHead ? 1.6 : 1));
+    for (let i = 0; i < 3; i++) surfaceSplat(behind.point.clone().add(new THREE.Vector3(rand(-0.25, 0.25), rand(-0.2, 0.25), rand(-0.25, 0.25)).projectOnPlane(bn)), bn, rand(0.06, 0.14));
+    bulletHole(behind.point, bn, 0.03);
+  }
   hitEl.style.opacity = 1; hitT = 0.12;
 }
 
@@ -1182,6 +1363,14 @@ function update(realDt) {
   player.vel.y -= 12 * realDt;
   player.pos.addScaledVector(player.vel, realDt);
   if (player.pos.y <= 0) { player.pos.y = 0; player.vel.y = 0; player.onGround = true; }
+  for (const pr of props) { // push the player out of walls and crates
+    const l = player.pos.clone().setY(pr.mesh.position.y).applyMatrix4(pr.inv), h = pr.half, r = 0.35;
+    if (Math.abs(l.x) < h.x + r && Math.abs(l.z) < h.z + r && player.pos.y < pr.mesh.position.y + h.y) {
+      const px = h.x + r - Math.abs(l.x), pz = h.z + r - Math.abs(l.z);
+      if (px < pz) l.x = Math.sign(l.x) * (h.x + r); else l.z = Math.sign(l.z) * (h.z + r);
+      const back = l.applyMatrix4(pr.mesh.matrixWorld); player.pos.x = back.x; player.pos.z = back.z;
+    }
+  }
   const moving = Math.hypot(player.vel.x, player.vel.z);
   if (player.onGround && moving > 0.6) { gs.step -= realDt * moving; if (gs.step <= 0) { gs.step = 1.75; Sound.step(sprint ? 0.16 : 0.1); } }
   player.recoil *= Math.exp(-realDt * 8); player.recoilYaw *= Math.exp(-realDt * 8);
@@ -1236,6 +1425,12 @@ function update(realDt) {
     d.v.y -= 9.8 * dt; d.v.multiplyScalar(1 - 0.4 * dt);
     d.p.addScaledVector(d.v, dt);
     d.life -= dt;
+    const ph = propHit(d.p, d.p.clone().addScaledVector(d.v, -dt));
+    if (ph) {
+      d.on = false; dropMesh.setMatrixAt(i, ZERO);
+      if (Math.random() < 0.7 || d.r > 0.01) surfaceSplat(ph.point, ph.normal, d.r * rand(7, 12));
+      continue;
+    }
     if (d.p.y <= 0.002) {
       d.on = false; dropMesh.setMatrixAt(i, ZERO);
       const speed = Math.hypot(d.v.x, d.v.z);
@@ -1254,6 +1449,8 @@ function update(realDt) {
   }
   dropMesh.instanceMatrix.needsUpdate = true;
   updateFields(dt);
+  updateGibs(dt);
+  for (const r of runs) if (r.scale.y < r.userData.len) r.scale.y = Math.min(r.userData.len, r.scale.y + r.userData.speed * dt);
   updateFibers(dt);
   hitUniforms.uTime.value = performance.now() / 1000;
 
@@ -1304,7 +1501,7 @@ new GLTFLoader().load("models/Soldier.glb", g => {
   const head = g.scene.getObjectByName(BN("Head")), foot = g.scene.getObjectByName(BN("LeftFoot"));
   const span = head.getWorldPosition(V()).y - foot.getWorldPosition(V()).y;
   MODEL_SCALE = span > 0.01 ? 1.8 * 0.85 / span : 1;
-  new Soldier(0, -5, Math.PI);
+  new Soldier(0, -6.4, Math.PI); // in front of the wall
   document.getElementById("startText").textContent = "Click to start";
   setTimeout(() => (document.getElementById("help").style.opacity = 0), 9000);
 }, undefined, e => { document.getElementById("startText").textContent = location.protocol === "file:" ? "Run start.bat to open this through localhost" : "Couldn't load the soldier model"; });
