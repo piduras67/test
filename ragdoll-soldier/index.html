@@ -52,6 +52,8 @@ import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 
 const rand = (a, b) => a + Math.random() * (b - a);
+// blood switch: false turns off every blood effect (drops, splats, pools, stains, wall runs, gibs). set to true to bring it back.
+const BLOOD = false;
 const V = () => new THREE.Vector3();
 
 // ================================================================ renderer, sky, light
@@ -304,6 +306,7 @@ const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
 const UPV = new THREE.Vector3(0, 1, 0);
 for (let i = 0; i < MAX_DROPS; i++) dropMesh.setMatrixAt(i, ZERO);
 function drop(pos, vel, r) {
+  if (!BLOOD) return;
   const k = dropCursor;
   const d = drops[dropCursor]; dropCursor = (dropCursor + 1) % MAX_DROPS;
   dropMesh.setColorAt(k, PIXEL_COLORS[(Math.random() * PIXEL_COLORS.length) | 0]);
@@ -340,6 +343,7 @@ const splatMats = [0, 1, 2, 3, 4, 5].map(() => new THREE.MeshBasicMaterial({ map
 const splatGeo = new THREE.PlaneGeometry(1, 1); splatGeo.rotateX(-Math.PI / 2);
 const splats = [];
 function splat(x, z, size, stretchDir) {
+  if (!BLOOD) return;
   const m = new THREE.Mesh(splatGeo, splatMats[(Math.random() * splatMats.length) | 0]);
   m.position.set(x, 0.002 + splats.length % 20 * 0.00005, z);
   m.rotation.y = ((Math.random() * 4) | 0) * Math.PI / 2; // quarter turns only, so pixels stay square to the grid
@@ -357,6 +361,7 @@ const runTex = (() => {
 })();
 const runMat = new THREE.MeshBasicMaterial({ color: 0xd8d8d8, map: runTex, transparent: true, alphaTest: 0.5, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -5 });
 function surfaceSplat(point, normal, size) {
+  if (!BLOOD) return;
   const m = new THREE.Mesh(new THREE.PlaneGeometry(size, size), splatMats[(Math.random() * splatMats.length) | 0]);
   m.position.copy(point).addScaledVector(normal, 0.004);
   m.lookAt(point.clone().add(normal));
@@ -431,6 +436,7 @@ function bloodAt(x, z) {
   return false;
 }
 function pool(x, z, amount) {
+  if (!BLOOD) return;
   let f = fields.find(f => Math.abs(x - f.x) < FIELD_SIZE / 2 - 0.6 && Math.abs(z - f.z) < FIELD_SIZE / 2 - 0.6);
   if (!f) f = makeField(x, z);
   let src = f.sources.find(s => Math.hypot(s.x - x, s.z - z) < 0.12);
@@ -564,6 +570,7 @@ const gibGeo = new THREE.BoxGeometry(1, 1, 1);
 const gibMats = ["#3d0404", "#5e0707", "#7d1010", "#b5524a", "#d9c7b0"].map(c => new THREE.MeshLambertMaterial({ color: c, emissive: new THREE.Color(c).multiplyScalar(0.25) }));
 const gibs = [];
 function pixelGibs(point, dir, count) {
+  if (!BLOOD) return;
   for (let i = 0; i < count; i++) {
     const m = new THREE.Mesh(gibGeo, gibMats[Math.random() < 0.12 ? 4 : (Math.random() * 4) | 0]); // a little bone-white now and then
     const size = Math.round(rand(2, 6)) * 0.008;                                                          // sizes on a pixel grid
@@ -775,6 +782,7 @@ class Soldier {
     wound.quaternion.copy(part.group.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(new THREE.Quaternion().setFromUnitVectors(UPV, normal)));
     bulletHole(point, normal, 0.032, part.group); // a pixel hole punched in his gear
     const stain = new THREE.Mesh(STAIN_GEO, woundMat);
+    stain.visible = BLOOD;
     stain.rotation.x = -Math.PI / 2; stain.position.y = 0.002;
     stain.scale.setScalar(rand(0.025, 0.035));
     wound.add(stain);
