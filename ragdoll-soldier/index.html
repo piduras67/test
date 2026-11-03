@@ -34,7 +34,7 @@
 <div id="hud">
   <div id="dot"></div>
   <div id="hit"></div>
-  <div id="help">1 pistol &nbsp;·&nbsp; 2 rifle &nbsp;·&nbsp; 3 shotgun &nbsp;·&nbsp; 4 sword &nbsp;·&nbsp; 5 gravity gun (RMB grab, LMB launch, R spin, wheel distance) &nbsp;·&nbsp; LMB fire / slash &nbsp;·&nbsp; RMB aim / stab &nbsp;·&nbsp; R reload &nbsp;·&nbsp; E new target &nbsp;·&nbsp; Q slow motion</div>
+  <div id="help">1 pistol &nbsp;·&nbsp; 2 rifle &nbsp;·&nbsp; 3 shotgun &nbsp;·&nbsp; 4 sword &nbsp;·&nbsp; 5 gravity gun (RMB grab, LMB launch, R spin, wheel distance) &nbsp;·&nbsp; LMB fire / slash &nbsp;·&nbsp; RMB aim / stab &nbsp;·&nbsp; shoot the red barrels &nbsp;·&nbsp; R reload &nbsp;·&nbsp; E new target &nbsp;·&nbsp; Q slow motion</div>
   <div id="ammo"><b id="mag">12</b> / <span id="magSize">12</span></div>
 </div>
 <div id="start"><div><div class="t" id="startText">Loading…</div><div class="s">WASD to move</div></div></div>
@@ -794,8 +794,9 @@ const gibMats = ["#4a0505", "#6a0b0b", "#8c1a17", "#b0524a", "#e0d4c0"].map((c, 
 const gibs = [];
 function pixelGibs(point, dir, count) {
   if (!BLOOD) return;
+  count = Math.round(count * 1.5);
   for (let i = 0; i < count; i++) {
-    const m = new THREE.Mesh(gibGeo, gibMats[Math.random() < 0.12 ? 4 : (Math.random() * 4) | 0]); // a little bone-white now and then
+    const m = new THREE.Mesh(gibGeo, gibMats[Math.random() < 0.2 ? 4 : (Math.random() * 4) | 0]); // bone fragments among the meat
     const size = rand(0.012, 0.045);
     m.scale.setScalar(size); m.position.copy(point); m.castShadow = true;
     m.userData = { v: dir.clone().multiplyScalar(rand(1.5, 4.5)).add(new THREE.Vector3(rand(-1.6, 1.6), rand(0.8, 3.2), rand(-1.6, 1.6))), spin: new THREE.Vector3(rand(-14, 14), rand(-14, 14), rand(-14, 14)), size, landed: false, rest: false, trail: 0 };
@@ -863,8 +864,17 @@ const muzzleSmoke = (pos, dir) => {
 };
 
 // ================================================================ the pistol
-const metal = new THREE.MeshStandardMaterial({ color: 0x2a2c30, metalness: 0.9, roughness: 0.36 });
-const polymer = new THREE.MeshStandardMaterial({ color: 0x1b1c1e, metalness: 0.05, roughness: 0.78 });
+// gun finishes: parkerized steel with worn, shiny edges; stippled polymer; both with fine surface relief
+function finishTex(base, wear, grain) {
+  const n = 256, c = document.createElement("canvas"); c.width = c.height = n; const g = c.getContext("2d");
+  g.fillStyle = base; g.fillRect(0, 0, n, n);
+  for (let i = 0; i < 9000; i++) { const v = rand(-1, 1); g.fillStyle = v > 0 ? `rgba(255,255,255,${grain * v})` : `rgba(0,0,0,${-grain * v})`; g.fillRect(rand(0, n), rand(0, n), 1.5, 1.5); }
+  for (let i = 0; i < 60; i++) { g.strokeStyle = `rgba(200,200,205,${rand(0.03, wear)})`; g.lineWidth = rand(0.5, 2); g.beginPath(); const x = rand(0, n), y = rand(0, n); g.moveTo(x, y); g.lineTo(x + rand(-40, 40), y + rand(-6, 6)); g.stroke(); } // holster wear, scratches
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; t.repeat.set(2, 2); return t;
+}
+const roughTex = (() => { const n = 128, c = document.createElement("canvas"); c.width = c.height = n; const g = c.getContext("2d"); g.fillStyle = "#9a9a9a"; g.fillRect(0, 0, n, n); for (let i = 0; i < 3000; i++) { const v = rand(60, 220) | 0; g.fillStyle = `rgb(${v},${v},${v})`; g.fillRect(rand(0, n), rand(0, n), 1, 1); } const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(3, 3); return t; })();
+const metal = new THREE.MeshPhysicalMaterial({ color: 0xffffff, map: finishTex("#33363b", 0.35, 0.05), roughnessMap: roughTex, metalness: 0.85, roughness: 0.42, clearcoat: 0.25, clearcoatRoughness: 0.4 });
+const polymer = new THREE.MeshPhysicalMaterial({ color: 0xffffff, map: finishTex("#1e1f22", 0.12, 0.09), roughnessMap: roughTex, metalness: 0.05, roughness: 0.8, sheen: 0.4, sheenRoughness: 0.8, sheenColor: new THREE.Color(0x30343a) });
 const brass = new THREE.MeshStandardMaterial({ color: 0xb98c3c, metalness: 1, roughness: 0.28 });
 function rbox(parent, size, pos, mat, rot) {
   const m = new THREE.Mesh(new RoundedBoxGeometry(size[0], size[1], size[2], 3, Math.min(...size) * 0.22), mat);
@@ -879,6 +889,7 @@ rbox(slide, [0.029, 0.031, 0.188], [0, 0.03, 0], metal);
 for (let i = 0; i < 8; i++) rbox(slide, [0.0302, 0.022, 0.0025], [0, 0.031, 0.058 + i * 0.0055], polymer);
 rbox(slide, [0.005, 0.007, 0.007], [0, 0.049, -0.087], polymer);
 rbox(slide, [0.02, 0.007, 0.007], [0, 0.049, 0.085], polymer);
+{ const glow = new THREE.MeshBasicMaterial({ color: 0x9dff6a }); for (const [x, z] of [[0, -0.087], [-0.0055, 0.085], [0.0055, 0.085]]) { const d = new THREE.Mesh(new THREE.SphereGeometry(0.0013, 8, 6), glow); d.position.set(x, 0.0535, z); slide.add(d); } }
 rbox(slide, [0.012, 0.011, 0.03], [0.011, 0.031, -0.012], metal);
 const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.007, 0.03, 20), metal); barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.03, -0.098); pistolM.add(barrel);
 rbox(pistolM, [0.027, 0.025, 0.17], [0, 0.003, 0.004], polymer);
@@ -1045,7 +1056,7 @@ const SEG_BY_BONE = {}; for (const s of SEGS) SEG_BY_BONE[BN(s.a)] = s.n;
 const toV = v => new THREE.Vector3(v.x, v.y, v.z), toQ = q => new THREE.Quaternion(q.x, q.y, q.z, q.w);
 const ONE = new THREE.Vector3(1, 1, 1);
 const qI = new THREE.Quaternion();
-let MODEL = null, MODEL_SCALE = 1;
+let MODEL = null, MODEL_SCALE = 1, MODEL_FACING = 0;
 const soldiers = [];
 const hitMeshes = new Map();
 
@@ -1083,7 +1094,7 @@ class Soldier {
     this.soak.tex.flipY = false; // glTF UVs
     this.root.traverse(o => { if (o.isSkinnedMesh) { const mats = [].concat(o.material).map(m => { const c = m.clone(); if (BLOOD) addSoak(c, this.soak.tex); else addRipple(c); return c; }); o.material = mats.length === 1 ? mats[0] : mats; } });
     this.root.scale.setScalar(MODEL_SCALE);
-    this.root.position.set(x, 0, z); this.root.rotation.y = yaw;
+    this.root.position.set(x, 0, z); this.root.rotation.y = yaw + MODEL_FACING;
     this.bones = {}; this.boneList = [];
     this.root.traverse(o => {
       if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; }
@@ -1427,6 +1438,15 @@ class Soldier {
     }
     this.react(R, wound, dir);
     this.painReaction(R, point, dir);
+    // every bullet chips away at the limb it hits; enough and it comes off
+    {
+      this.limbHp = this.limbHp || { head: 55, uArmL: 45, uArmR: 45, lArmL: 35, lArmR: 35, uLegL: 75, uLegR: 75, lLegL: 55, lLegR: 55 };
+      const part = R.mode === "neck" ? "head" : region;
+      if (part in this.limbHp && !(this.joints[part] && this.joints[part].severed)) {
+        this.limbHp[part] -= (opts.dmg || 18) * (opts.dist !== undefined && opts.dist < 4 ? 1.5 : 1);
+        if (this.limbHp[part] <= 0) { if (part === "head" && Math.random() < 0.5) { this.lastHitHead = true; this.blowOffAt(this.boneWorld("Head"), dir); } else this.sever(part, dir); pixelGibs(point, dir, 10); }
+      }
+    }
     // a heavy hit can pop a shoulder or a knee
     if (opts.heavy && (R.mode === "arm" || R.mode === "leg") && Math.random() < 0.45) this.dislocate(R.mode === "arm" ? "uArm" + R.side : "lLeg" + R.side);
   }
@@ -2406,6 +2426,54 @@ function updateGrav(dt) {
 }
 addEventListener("wheel", e => { if (weapon === "gravity" && G.held) G.dist = THREE.MathUtils.clamp(G.dist - Math.sign(e.deltaY) * 0.25, 1.4, 6); });
 
+// ================================================================ explosive barrels
+const barrels = [];
+const redPaint = new THREE.MeshStandardMaterial({ color: 0xa3150e, roughness: 0.45, metalness: 0.5, map: finishTex("#ffffff", 0.3, 0.06) });
+const hazard = new THREE.MeshStandardMaterial({ color: 0xe8c21a, roughness: 0.5, metalness: 0.3 });
+function makeBarrel(x, z) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.29, 0.29, 0.88, 28), redPaint); g.add(body);
+  for (const y of [-0.3, 0, 0.3]) { const r = new THREE.Mesh(new THREE.TorusGeometry(0.292, 0.012, 6, 28), redPaint); r.rotation.x = Math.PI / 2; r.position.y = y; g.add(r); }
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.293, 0.293, 0.1, 28, 1, true), hazard); band.position.y = 0.15; g.add(band);
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.03, 12), hazard); cap.position.set(0.12, 0.45, 0); g.add(cap);
+  g.traverse(o => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; o.userData.barrel = g; } });
+  g.position.set(x, 0.44, z); scene.add(g); g.updateMatrixWorld(true);
+  g.userData = { home: [x, z], alive: true };
+  barrels.push(g); return g;
+}
+makeBarrel(-2.2, -5.2); makeBarrel(2.0, -7.9); makeBarrel(-3.2, -8.1);
+const fireTex = (() => { const n = 128, c = document.createElement("canvas"); c.width = c.height = n; const g = c.getContext("2d"); const gr = g.createRadialGradient(64, 64, 0, 64, 64, 64); gr.addColorStop(0, "rgba(255,250,220,1)"); gr.addColorStop(0.25, "rgba(255,190,80,0.95)"); gr.addColorStop(0.6, "rgba(220,70,20,0.6)"); gr.addColorStop(1, "rgba(80,10,0,0)"); g.fillStyle = gr; g.fillRect(0, 0, n, n); return new THREE.CanvasTexture(c); })();
+const blastLight = new THREE.PointLight(0xffa050, 0, 18, 1.6); scene.add(blastLight);
+function explode(barrel) {
+  if (!barrel.userData.alive) return;
+  barrel.userData.alive = false; barrel.visible = false;
+  const at = barrel.position.clone();
+  // fireball, smoke, debris, light, sound, shake
+  for (let i = 0; i < 14; i++) { const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: fireTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0, rotation: rand(0, 6.28) })); s.position.copy(at).add(V().set(rand(-0.3, 0.3), rand(0, 0.6), rand(-0.3, 0.3))); s.userData = { t: 0, life: rand(0.35, 0.7), v: V().set(rand(-3, 3), rand(1, 5), rand(-3, 3)), size: rand(0.5, 1.0), spin: rand(-2, 2), grow: 0.8, mist: true }; scene.add(s); puffs.push(s); }
+  dust(at, 14, 0x3a3532); dust(at.clone().setY(0.1), 10, 0x8a8278);
+  sparkBurst(at, 80, V().set(0, 1, 0));
+  blastLight.position.copy(at).y += 0.8; blastLight.intensity = 60;
+  Sound.launch(at); Sound.launch(at); Sound.clang(at);
+  gs.shake = 1;
+  for (let i = 0; i < 6; i++) bulletHole(at.clone().setY(0.003).add(V().set(rand(-0.6, 0.6), 0, rand(-0.6, 0.6))), V().set(0, 1, 0), rand(0.4, 0.9)); // scorch
+  // bodies: shoved, limbs torn off close in, blown to pieces right on top of it
+  for (const s of [...soldiers]) {
+    const hips = s.boneWorld("Hips"), d = hips.distanceTo(at); if (d > 6) continue;
+    if (s.state === "idle") s.becomeRagdoll(hips, hips.clone().sub(at).normalize(), false, false);
+    if (s.balance) s.endBalance();
+    s.frozen = false; s.catchT = 99; s.hp -= 160 * Math.max(0, 1 - d / 5);
+    for (const k in s.parts) { const b = s.parts[k].body, p = toV(b.position), off = p.clone().sub(at), dist = Math.max(0.3, off.length()), f = 26 / (dist * dist + 0.6);
+      b.velocity.x += off.x / dist * f; b.velocity.y += off.y / dist * f + f * 0.6; b.velocity.z += off.z / dist * f; b.angularVelocity.set(rand(-12, 12), rand(-12, 12), rand(-12, 12)); b.wakeUp(); }
+    const tear = d < 1.6 ? 1 : d < 3 ? 0.5 : 0;
+    for (const k of ["uArmL", "uArmR", "lArmL", "lArmR", "uLegL", "uLegR", "lLegL", "lLegR"]) if (Math.random() < tear * (k.startsWith("l") ? 0.6 : 0.7)) s.sever(k, s.boneWorld(k.includes("Arm") ? (k.endsWith("L") ? "LeftArm" : "RightArm") : (k.endsWith("L") ? "LeftUpLeg" : "RightUpLeg")).sub(at).normalize());
+    if (d < 1.6) { s.lastHitHead = true; s.blowOffAt(s.boneWorld("Head"), s.boneWorld("Head").sub(at).normalize()); pixelGibs(hips, hips.clone().sub(at).normalize(), 30); spray(hips, V().set(0, 1, 0), 150, 6, 1.2, 0.006, 0.02); }
+    if (d < 2.5) { s.dead = true; s.hp = -999; }
+  }
+  // chain reactions
+  for (const b of barrels) if (b !== barrel && b.userData.alive && b.position.distanceTo(at) < 2.6) setTimeout(() => explode(b), rand(120, 280));
+  setTimeout(() => { barrel.visible = true; barrel.userData.alive = true; }, 9000);
+}
+
 // ================================================================ player, input, shooting
 const player = { pos: new THREE.Vector3(0, 0, 0), vel: V(), yaw: 0, pitch: -0.05, recoil: 0, recoilYaw: 0, onGround: true };
 const keys = {};
@@ -2477,7 +2545,7 @@ function shoot() {
   player.recoil += aiming ? W.recoil[1] : W.recoil[0]; player.recoilYaw += rand(-0.012, 0.012) * (W.pump ? 2.5 : 1);
   muzzle.getWorldPosition(flash.position);
   flash.scale.setScalar(rand(0.12, 0.18)); flash.material.rotation = rand(0, 6.28); flash.visible = true; flash.userData.t = 0.04;
-  flashLight.position.copy(flash.position); flashLight.intensity = 5;
+  flashLight.position.copy(flash.position); flashLight.intensity = W.pellets > 1 ? 14 : W === GUNS.rifle ? 9 : 7;
   muzzleSmoke(flash.position, V().set(0, 0, -1).applyQuaternion(eye.quaternion));
   if (!W.pump) ejectShell();
   Sound.shot(W.sound);
@@ -2491,8 +2559,9 @@ function fireRay(perSoldier) {
   const meshes = [...hitMeshes.keys()];
   for (const m of meshes) { m.boundingSphere = null; m.boundingBox = null; }
   const propMeshes = props.map(p => p.mesh);
-  const hit = raycaster.intersectObjects([...meshes, plate, ...propMeshes], false)[0];
+  const hit = raycaster.intersectObjects([...meshes, plate, ...propMeshes, ...barrels.filter(b => b.userData.alive)], true)[0];
   if (!hit) return;
+  if (hit.object.userData.barrel) { const b = hit.object.userData.barrel; b.userData.hits = (b.userData.hits || 0) + 1; sparkBurst(hit.point, 8, dir.clone().negate()); if (b.userData.hits >= (W.pellets > 1 ? 1 : 2)) { b.userData.hits = 0; explode(b); } return; }
   if (hit.object === plate) {
     if (bloodAt(hit.point.x, hit.point.z)) {
       // a bullet into a pool kicks up a splash of pixel blood
@@ -2514,7 +2583,7 @@ function fireRay(perSoldier) {
   const count = (perSoldier.get(s) || 0) + 1; perSoldier.set(s, count);
   if (count > 3) { redMist(hit.point, dir, 0.6); spray(hit.point, dir, 14, 3.5, 0.5); hitEl.style.opacity = 1; hitT = 0.12; return; }
   const hd = hit.point.distanceTo(eye.position); // range from the shooter, not the camera behind him
-  const res = s.hit(hit.point, n, dir, { hitInfo: hit, pen: W.pen, dist: hd, heavy: (W.pellets > 1 && hd < 6) || (W === GUNS.rifle && Math.random() < 0.3) });
+  const res = s.hit(hit.point, n, dir, { hitInfo: hit, pen: W.pen, dist: hd, heavy: (W.pellets > 1 && hd < 6) || (W === GUNS.rifle && Math.random() < 0.3), dmg: W.pellets > 1 ? 14 : W === GUNS.rifle ? 22 : 18 });
   if (res === "armor") { hitEl.style.opacity = 1; hitT = 0.12; return; }
   // the bullet comes out the other side
   s.exitWound(hit.point, dir);
@@ -2651,7 +2720,8 @@ function update(realDt) {
   if (player.onGround && moving > 0.6) { gs.step -= realDt * moving; if (gs.step <= 0) { gs.step = 1.75; Sound.step(sprint ? 0.16 : 0.1); } }
   player.recoil *= Math.exp(-realDt * 8); player.recoilYaw *= Math.exp(-realDt * 8);
   if (firstPerson) {
-    camera.rotation.set(player.pitch + player.recoil, player.yaw + player.recoilYaw, 0);
+    gs.shake = Math.max(0, (gs.shake || 0) - realDt * 1.6);
+    camera.rotation.set(player.pitch + player.recoil + rand(-1, 1) * gs.shake * 0.03, player.yaw + player.recoilYaw + rand(-1, 1) * gs.shake * 0.03, rand(-1, 1) * gs.shake * 0.02);
     eye.rotation.copy(camera.rotation);
     eye.position.set(player.pos.x, player.pos.y + 1.6, player.pos.z);
   } else {
@@ -2722,6 +2792,7 @@ function update(realDt) {
   if (firstPerson) { camera.position.copy(eye.position); camera.updateMatrixWorld(); }
   if (flash.visible) { flash.userData.t -= realDt; muzzle.getWorldPosition(flash.position); if (flash.userData.t <= 0) flash.visible = false; }
   flashLight.intensity *= Math.exp(-realDt * 45);
+  blastLight.intensity *= Math.exp(-realDt * 6);
   if (hitT > 0) { hitT -= realDt; if (hitT <= 0) hitEl.style.opacity = 0; }
 
   // world
@@ -2806,7 +2877,58 @@ function loop() {
 }
 
 // ================================================================ start
-new GLTFLoader().load("models/Soldier.glb", g => {
+// retarget by aiming: every bone is turned so it points where the matching soldier bone points, frame by frame.
+// works across rigs whose rest poses differ (the soldier rests in a T-pose, the human in an A-pose) and facing (flip = 180 deg).
+function retargetClip(srcRoot, dstRoot, clip, flip) {
+  const sb = {}, order = [];
+  srcRoot.traverse(o => { if (o.isBone) sb[o.name] = o; });
+  dstRoot.traverse(o => { if (o.isBone) order.push(o); });
+  const F = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), flip), Fi = F.clone().invert();
+  const mixer = new THREE.AnimationMixer(srcRoot);
+  const wq = o => o.getWorldQuaternion(new THREE.Quaternion()), wp = o => o.getWorldPosition(new THREE.Vector3());
+  srcRoot.updateMatrixWorld(true); dstRoot.updateMatrixWorld(true);
+  const restLocal = {}, hipsRest = {}, staticParent = {}, aimChild = {};
+  for (const o of order) {
+    restLocal[o.name] = o.quaternion.clone();
+    if (!o.parent.isBone) staticParent[o.name] = wq(o.parent);
+    // the child that defines the bone's direction (one the soldier also has)
+    const c = o.children.find(ch => ch.isBone && sb[ch.name] && /Spine|Neck|Head|Arm|ForeArm|Hand$|UpLeg|Leg$|Foot|ToeBase|HandMiddle1/.test(ch.name)) || o.children.find(ch => ch.isBone && sb[ch.name]);
+    if (c && sb[o.name]) aimChild[o.name] = c;
+  }
+  const H = "mixamorigHips";
+  const sHipsRestInv = wq(sb[H]).invert(), dHipsRest = wq(order.find(o => o.name === H));
+  const times = []; for (let t = 0; t <= clip.duration + 1e-6; t += 1 / 30) times.push(Math.min(t, clip.duration));
+  const vals = {}; for (const o of order) vals[o.name] = [];
+  const act = mixer.clipAction(clip); act.play();
+  for (const t of times) {
+    mixer.setTime(t); srcRoot.updateMatrixWorld(true);
+    const W = {};
+    for (const o of order) {
+      const n = o.name, pW = o.parent.isBone ? W[o.parent.name] : staticParent[n];
+      const cand = pW.clone().multiply(restLocal[n]);
+      let w = cand;
+      if (n === H) w = F.clone().multiply(wq(sb[H]).multiply(sHipsRestInv)).multiply(Fi).multiply(dHipsRest);
+      else if (aimChild[n] && !/Hand(Index|Middle|Ring|Pinky|Thumb)/.test(n)) {
+        const c = aimChild[n];
+        const dDir = c.position.clone().applyQuaternion(cand).normalize();
+        const sDir = wp(sb[c.name]).sub(wp(sb[n])).applyQuaternion(F).normalize();
+        if (dDir.lengthSq() > 0.5 && sDir.lengthSq() > 0.5) w = new THREE.Quaternion().setFromUnitVectors(dDir, sDir).multiply(cand);
+      }
+      W[n] = w;
+      const l = pW.clone().invert().multiply(w);
+      vals[n].push(l.x, l.y, l.z, l.w);
+    }
+  }
+  mixer.stopAllAction();
+  return new THREE.AnimationClip(clip.name, clip.duration, order.map(o => new THREE.QuaternionKeyframeTrack(o.name + ".quaternion", times, vals[o.name])));
+}
+// the soldier file is kept for its Idle/Walk/Run clips; the body is a plain human (bones without the "mixamorig" prefix)
+new GLTFLoader().load("models/Soldier.glb", anims => new GLTFLoader().load("models/human.glb", g => {
+  g.scene.traverse(o => { if (o.isBone && !o.name.startsWith("mixamorig")) o.name = "mixamorig" + o.name; });
+  // retarget: each bone copies the soldier's motion *relative to its rest pose*, measured in world space,
+  // so differences in how the two rigs' bones are oriented don't twist the limbs
+  g.animations = anims.animations.filter(c => c.name !== "TPose").map(c => retargetClip(anims.scene, g.scene, c, Math.PI));
+  MODEL_FACING = Math.PI; // this model faces +Z
   MODEL = g;
   g.scene.traverse(o => { if (o.isSkinnedMesh) for (const m of [].concat(o.material)) addRipple(m); });
   g.scene.updateMatrixWorld(true);
@@ -2817,11 +2939,11 @@ new GLTFLoader().load("models/Soldier.glb", g => {
   selectGun("pistol"); // no player body: just the weapons in front of the camera
   document.getElementById("startText").textContent = "Click to start";
   setTimeout(() => (document.getElementById("help").style.opacity = 0), 9000);
-}, undefined, e => { document.getElementById("startText").textContent = location.protocol === "file:" ? "Run start.bat to open this through localhost" : "Couldn't load the soldier model"; });
+}, undefined, e => { document.getElementById("startText").textContent = "Couldn't load the human model"; }), undefined, e => { document.getElementById("startText").textContent = location.protocol === "file:" ? "Run start.bat to open this through localhost" : "Couldn't load the soldier model"; });
 loop();
 
 // testing hooks
-window.__game = { sync: () => { for (const s of soldiers) s.pose(); scene.updateMatrixWorld(); }, gravGrab, gravFire, G, setFP: v => { firstPerson = v; }, me: () => me, eye, scene, renderer, sw, sword, setWeapon: w => setWeapon(w), swordAttack: k => swordAttack(k), player, soldiers, camera, shoot: () => { gs.cd = 0; shoot(); }, update, render, spawnTarget };
+window.__game = { explode, barrels, sync: () => { for (const s of soldiers) s.pose(); scene.updateMatrixWorld(); }, gravGrab, gravFire, G, setFP: v => { firstPerson = v; }, me: () => me, eye, scene, renderer, sw, sword, setWeapon: w => setWeapon(w), swordAttack: k => swordAttack(k), player, soldiers, camera, shoot: () => { gs.cd = 0; shoot(); }, update, render, spawnTarget };
 </script>
 </body>
 </html>
