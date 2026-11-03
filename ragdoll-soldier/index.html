@@ -34,7 +34,7 @@
 <div id="hud">
   <div id="dot"></div>
   <div id="hit"></div>
-  <div id="help">1 pistol &nbsp;·&nbsp; 2 rifle &nbsp;·&nbsp; 3 shotgun &nbsp;·&nbsp; 4 sword &nbsp;·&nbsp; LMB fire / slash &nbsp;·&nbsp; RMB aim / stab &nbsp;·&nbsp; R reload &nbsp;·&nbsp; E new target &nbsp;·&nbsp; Q slow motion</div>
+  <div id="help">1 pistol &nbsp;·&nbsp; 2 rifle &nbsp;·&nbsp; 3 shotgun &nbsp;·&nbsp; 4 sword &nbsp;·&nbsp; 5 gravity gun (RMB grab, LMB launch, R spin, wheel distance) &nbsp;·&nbsp; LMB fire / slash &nbsp;·&nbsp; RMB aim / stab &nbsp;·&nbsp; R reload &nbsp;·&nbsp; E new target &nbsp;·&nbsp; Q slow motion</div>
   <div id="ammo"><b id="mag">12</b> / <span id="magSize">12</span></div>
 </div>
 <div id="start"><div><div class="t" id="startText">Loading…</div><div class="s">WASD to move</div></div></div>
@@ -315,6 +315,17 @@ const Sound = (() => {
       if (!ok()) return; const t = ctx.currentTime, d = out(pos, 0.35), g = Math.min(1, s / 5);
       tone(d, t, 0.22, 85, 34, 0.75 * g); noise(d, t, 0.16, "lowpass", 380, 1, 0.55 * g); noise(d, t, 0.35, "bandpass", 900, 0.8, 0.12 * g); // body + cloth + grit
     },
+    // a helmet hitting concrete: a short metallic knock with a ring
+    clank(pos, s = 1) { if (!ok()) return; const t = ctx.currentTime, d = out(pos, 0.3), g = Math.min(1, s); for (const f of [rand(620, 760), rand(1450, 1700), rand(2900, 3300)]) tone(d, t, 0.3, f, f * 0.98, 0.12 * g, "triangle"); noise(d, t, 0.05, "bandpass", 1800, 2, 0.4 * g); tone(d, t, 0.12, 120, 50, 0.4 * g); },
+    // armour plates and pouches knocking together
+    rattle(pos, s = 1) { if (!ok()) return; const t = ctx.currentTime, d = out(pos, 0.2), g = Math.min(1, s); for (let i = 0; i < 5; i++) { const at = t + i * rand(0.018, 0.04); noise(d, at, 0.03, "bandpass", rand(1800, 3800), 5, 0.22 * g); tone(d, at, 0.04, rand(900, 1400), rand(700, 900), 0.05 * g, "triangle"); } },
+    // a boot scraping the floor
+    scuff(pos, s = 1) { if (!ok()) return; const t = ctx.currentTime, d = out(pos, 0.15), g = Math.min(1, s); noise(d, t, 0.18, "bandpass", 1100, 0.9, 0.35 * g); noise(d, t, 0.06, "lowpass", 300, 1, 0.4 * g); },
+    // a joint popping out
+    pop(pos) { if (!ok()) return; const t = ctx.currentTime, d = out(pos, 0.3); noise(d, t, 0.025, "bandpass", 2400, 6, 0.6); noise(d, t + 0.015, 0.04, "bandpass", 900, 4, 0.5); tone(d, t, 0.08, 180, 70, 0.4); },
+    // gravity gun: a charged hum on grab, a deep thump on launch
+    zap(pos) { if (!ok()) return; const t = ctx.currentTime, d = out(pos, 0.4); tone(d, t, 0.35, 180, 520, 0.25, "sawtooth"); tone(d, t, 0.35, 90, 260, 0.2); noise(d, t, 0.2, "bandpass", 2500, 3, 0.15); },
+    launch(pos) { if (!ok()) return; const t = ctx.currentTime, d = out(pos, 0.8); tone(d, t, 0.4, 140, 35, 0.9); noise(d, t, 0.3, "lowpass", 800, 0.6, 0.7); tone(d, t, 0.25, 900, 200, 0.2, "sawtooth"); },
     drip(pos) { if (!ok()) return; const t = ctx.currentTime, d = out(pos, 0.1), f = rand(900, 1500); tone(d, t, 0.06, f, f * 1.8, 0.05); },
     step(gain) { if (!ok()) return; const t = ctx.currentTime, d = out(null, 0.05); noise(d, t, 0.08, "lowpass", 450, 1, gain); noise(d, t, 0.04, "highpass", 3000, 1, gain * 0.25); },
     // wet, bubbling breaths through blood
@@ -1075,6 +1086,7 @@ class Soldier {
     // a blade shoves the part it meets far harder than a bullet does
     const imp = dir.clone().multiplyScalar((kind === "stab" ? 22 : 14) * power);
     part.body.applyImpulse(new CANNON.Vec3(imp.x, imp.y * 0.6, imp.z), new CANNON.Vec3(point.x - part.body.position.x, point.y - part.body.position.y, point.z - part.body.position.z));
+    if (kind === "slash" && power > 1.1 && /^(uArm|lLeg)/.test(partName) && Math.random() < 0.35) this.dislocate(partName);
     if (kind === "stab") { redMist(point, dir, 0.8); Sound.stab(point); this.hp -= 30; decalOn(part.group, exitMat, point, normal, 0.05, 0.05); return; }
     Sound.slice(point);
     // the cut itself, laid along the line the blade travelled across him
@@ -1158,7 +1170,35 @@ class Soldier {
     this.frozen = false;
   }
   // which part of him the bullet went into: head, neck, chest, gut, an arm or a leg (and which side)
+  // being aimed at: after a moment he flinches, ducks and throws his forearms up in front of his face
+  stepBrace(dt) {
+    const chest = this.boneWorld("Spine2"), fwdCam = V().set(0, 0, -1).applyQuaternion(camera.quaternion);
+    const to = chest.clone().sub(camera.position), along = to.dot(fwdCam);
+    const off = to.clone().addScaledVector(fwdCam, -along).length();
+    const aimed = along > 0.5 && along < 30 && off < 0.35 + along * 0.02;
+    this.aimT = aimed ? (this.aimT || 0) + dt : Math.max(0, (this.aimT || 0) - dt * 2);
+    const want = this.aimT > 0.45 ? 1 : 0;
+    this.braceW = THREE.MathUtils.clamp((this.braceW || 0) + (want ? dt * 5 : -dt * 2), 0, 1);
+    if (want && !this.braced) { this.braced = true; Sound.breath(chest); }
+    if (!want && this.braceW === 0) this.braced = false;
+    const w = this.braceW; if (w <= 0) return;
+    this.root.updateMatrixWorld(true);
+    const { up, side, fwd } = this.bodyAxes(), b = this.bones;
+    // duck the head and hunch
+    for (const [n, a] of [["Spine1", 0.12], ["Spine2", 0.12], ["Neck", 0.25]]) if (b[n]) { b[n].rotateX(a * w); b[n].updateMatrixWorld(true); }
+    const face = this.boneWorld("Head").addScaledVector(up, 0.06).addScaledVector(fwd, 0.2);
+    for (const [S, sg] of [["Left", 1], ["Right", -1]]) {
+      const sh = this.boneWorld(S + "Arm");
+      const pole = sh.clone().addScaledVector(up, -0.35).addScaledVector(side, 0.35 * sg).addScaledVector(fwd, 0.3);
+      armIK(b[S + "Arm"], b[S + "ForeArm"], b[S + "Hand"], face.clone().addScaledVector(side, 0.06 * sg), pole, w);
+    }
+  }
   bodyRegion(point, dir) {
+    // braced: forearms in front of the face catch the rounds meant for the head
+    if ((this.braceW || 0) > 0.5) for (const sd of ["L", "R"]) {
+      const H = sd === "L" ? "Left" : "Right", A = this.boneWorld(H + "ForeArm"), B = this.boneWorld(H + "Hand"), ab = B.clone().sub(A);
+      if (A.addScaledVector(ab, THREE.MathUtils.clamp(point.clone().sub(A).dot(ab) / ab.lengthSq(), 0, 1)).distanceTo(point) < 0.09) return { mode: "arm", side: sd };
+    }
     if (this.neckHit(point, dir)) return { mode: "neck" };
     if (this.headHit(point, dir)) return { mode: "head" };
     const seg = (a, b, t) => { const A = this.boneWorld(a), B = this.boneWorld(b), ab = B.clone().sub(A); return A.addScaledVector(ab, THREE.MathUtils.clamp(point.clone().sub(A).dot(ab) / ab.lengthSq(), 0, 1)).distanceTo(point) - t; };
@@ -1310,6 +1350,46 @@ class Soldier {
       for (const k in this.parts) { const b = this.parts[k].body; b.velocity.x += flat.x; b.velocity.z += flat.z; }
     }
     this.react(R, wound, dir);
+    this.painReaction(R, point, dir);
+    // a heavy hit can pop a shoulder or a knee
+    if (opts.heavy && (R.mode === "arm" || R.mode === "leg") && Math.random() < 0.45) this.dislocate(R.mode === "arm" ? "uArm" + R.side : "lLeg" + R.side);
+  }
+  painReaction(R, point, dir) {
+    if (!this.parts.chest) return;
+    const c = this.parts.chest.body, pel = this.parts.pelvis.body, { side, fwd } = this.bodyAxes();
+    // a hard hit to the body leaves him dazed: a second of shaking before anything else
+    if (["head", "neck", "chest", "gut"].includes(R.mode) && this.balance) { this.daze = rand(0.6, 1.0); this.balance.stun = Math.max(this.balance.stun, 0.35); }
+    if (R.mode === "leg") {
+      // the knee goes: that leg folds, the hip on that side drops, and he favours the other leg from now on
+      this.limpLeg = R.side;
+      const lo = this.parts["lLeg" + R.side].body, up = this.parts["uLeg" + R.side].body;
+      lo.angularVelocity.x += side.x * 6; lo.angularVelocity.z += side.z * 6;
+      up.angularVelocity.x -= side.x * 3.5; up.angularVelocity.z -= side.z * 3.5;
+      pel.velocity.y -= 0.7; c.velocity.y -= 0.4;
+      const lean = side.clone().multiplyScalar(R.side === "L" ? 0.5 : -0.5); c.velocity.x += lean.x; c.velocity.z += lean.z;
+    }
+    if (R.mode === "arm" && point.distanceTo(this.boneWorld(R.side === "L" ? "LeftArm" : "RightArm")) < 0.16) {
+      // a shoulder hit twists the whole upper body around
+      const r = point.clone().sub(toV(c.position)), spin = r.cross(dir).y;
+      c.angularVelocity.y += Math.sign(spin || 1) * 5.5; pel.angularVelocity.y += Math.sign(spin || 1) * 2;
+    }
+    if (R.mode === "gut") {
+      // folds over the wound: chest pitches forward, hips pushed back
+      c.angularVelocity.x += side.x * -4.5; c.angularVelocity.z += side.z * -4.5;
+      pel.velocity.x += dir.x * 0.9; pel.velocity.z += dir.z * 0.9;
+      c.velocity.x -= dir.x * 0.3; c.velocity.z -= dir.z * 0.3;
+    }
+  }
+  // a joint torn loose: the limb hangs at an angle a body can't make
+  dislocate(name) {
+    const c = this.joints[name]; if (!c || c.severed || c.dislocated) return;
+    c.dislocated = true;
+    c.coneEquation.angle = 2.9;
+    const b = this.parts[name].body;
+    b.angularVelocity.x += rand(-9, 9); b.angularVelocity.y += rand(-4, 4); b.angularVelocity.z += rand(-9, 9);
+    Sound.pop(toV(b.position));
+    for (const k in this.parts) this.parts[k].body.wakeUp();
+    this.frozen = false;
   }
   // the neck runs from the Neck bone up to the Head bone; the skull sits above the Head bone
   // does the bullet's path pass through the neck / skull? (armour and collars are just surface, the path is what matters)
@@ -1464,7 +1544,8 @@ class Soldier {
     if (off < 0.08) { B.settled += 1 / 60; return; }
     B.settled = 0;
     // step with the foot that is further from where he needs to be, keeping a natural stance width
-    const which = cp.distanceTo(L) > cp.distanceTo(R) ? "L" : "R";
+    let which = cp.distanceTo(L) > cp.distanceTo(R) ? "L" : "R";
+    if (this.limpLeg && which === this.limpLeg && Math.random() < 0.75) which = which === "L" ? "R" : "L"; // hops on the good leg
     const foot = this.feet[which];
     const stepDir = cp.clone().sub(mid).normalize();
     const side = new THREE.Vector3(-stepDir.z, 0, stepDir.x);
@@ -1583,6 +1664,7 @@ class Soldier {
       pel.velocity.x *= g; pel.velocity.z *= g;
     }
     if (Math.random() < dt * 0.7) Sound.breath(toV(this.parts.chest.body.position));
+    if (B.shaky) for (const k of ["chest", "head"]) { const b = this.parts[k].body; b.angularVelocity.x += rand(-0.6, 0.6); b.angularVelocity.z += rand(-0.6, 0.6); }
   }
   endBalance() {
     this.balance = null;
@@ -1634,17 +1716,96 @@ class Soldier {
       if (tip && tip.distanceTo(t) < 0.12 && c.velocity.y < 0) c.applyForce(new CANNON.Vec3(0, 60 * (1 - this.catchT / 1.4), 0));
     }
   }
+  // dazed: shaking, wobbling, not yet reacting
+  stepDaze(dt) {
+    if (!(this.daze > 0)) return;
+    this.daze -= dt;
+    const a = Math.min(1, this.daze * 2) * 1.6;
+    for (const k of ["chest", "head", "lArmL", "lArmR"]) { const b = this.parts[k] && this.parts[k].body; if (!b) continue; b.angularVelocity.x += rand(-a, a); b.angularVelocity.y += rand(-a, a) * 0.5; b.angularVelocity.z += rand(-a, a); }
+    if (this.balance) this.balance.stun = Math.max(this.balance.stun, 0.12);
+  }
+  // rolling over on the floor rattles his gear
+  stepRollRattle(dt) {
+    const c = this.parts.chest.body;
+    if (c.position.y > 0.4 || c.sleepState === CANNON.Body.SLEEPING) return;
+    const w = c.angularVelocity.length();
+    this.rollT = (this.rollT || 0) - dt;
+    if (w > 2.2 && this.rollT <= 0) { this.rollT = rand(0.15, 0.3); Sound.rattle(toV(c.position), Math.min(1, w / 6)); }
+  }
+  // the last thing he does: a hand lifts toward the sky, then sinks down
+  stepLastBreath(dt) {
+    const L = this.lastBreath; if (!L || L.t > 3.6) return;
+    L.t += dt;
+    const c = toV(this.parts.chest.body.position);
+    const k = L.t < 1.4 ? 120 * THREE.MathUtils.smoothstep(L.t, 0, 0.8) : 120 * Math.max(0, 1 - (L.t - 1.4) / 2.2);
+    this.reach(L.side, c.clone().add(V().set(0, 0.85, 0)).addScaledVector(this.bodyAxes().side, L.side === "L" ? 0.15 : -0.15), k, false);
+    for (const kk in this.parts) this.parts[kk].body.wakeUp();
+    if (L.t > 1.4 && !L.sighed) { L.sighed = true; Sound.breath(c); }
+  }
+  // only lightly hurt: arms and legs only, not much damage, nothing cut or blown off
+  lightlyHurt() {
+    return !this.dead && this.hp >= 55 && !(this.severedParts && this.severedParts.size) && !(this.blown && this.blown.size) && this.wounds.every(w => /Arm|Leg/.test(w.region));
+  }
+  // getting back up: roll onto the front, push up to the knees, stand, and fight for balance again (shakily)
+  stepGetUp(dt) {
+    if (this.balance || this.held || this.wallSlump) return;
+    const P = this.parts, c = P.chest.body, pel = P.pelvis.body;
+    if (!this.getUp) {
+      if (!this.lightlyHurt() || c.position.y > 0.45 || this.t < 2) { this.downT = 0; return; }
+      this.downT = (this.downT || 0) + dt;
+      if (this.downT < 1.8) return;
+      this.getUp = { t: 0, phase: this.bodyAxes().fwd.y > 0.3 ? "roll" : "knees" };
+      this.writhe = null; this.frozen = false; this.tone = 0;
+    }
+    const G = this.getUp; G.t += dt;
+    for (const k in P) P[k].body.wakeUp();
+    const hold = (b, y, kp = 40) => b.applyForce(new CANNON.Vec3(0, b.mass * (9.8 + kp * (y - b.position.y) - 7 * b.velocity.y), 0));
+    const pull = (b, x, z, kp = 25) => b.applyForce(new CANNON.Vec3(b.mass * (kp * (x - b.position.x) - 5 * b.velocity.x), 0, b.mass * (kp * (z - b.position.z) - 5 * b.velocity.z)));
+    const { up, side } = this.bodyAxes();
+    if (G.phase === "roll") {
+      if (G.t < 0.05) { const head = toV(c.position).sub(toV(pel.position)).setY(0).normalize(), s = Math.random() < 0.5 ? 1 : -1; for (const b of [c, pel]) { b.angularVelocity.x += head.x * 6 * s; b.angularVelocity.z += head.z * 6 * s; b.velocity.y += 1; } Sound.rattle(toV(c.position), 0.8); }
+      if (G.t > 1.1) { G.phase = "knees"; G.t = 0; }
+    } else if (G.phase === "knees") {
+      // hands planted under the shoulders, hips up over the knees
+      const u = THREE.MathUtils.smoothstep(G.t, 0, 1.4);
+      for (const sd of ["L", "R"]) this.reach(sd, toV(c.position).addScaledVector(side, sd === "L" ? 0.2 : -0.2).setY(0.03), 90, false);
+      hold(pel, 0.15 + 0.4 * u); hold(c, 0.15 + 0.45 * u, 30);
+      const mid = toV(pel.position);
+      for (const lg of ["lLegL", "lLegR"]) hold(P[lg].body, 0.08, 20);
+      if (G.t > 1.6) { G.phase = "stand"; G.t = 0; G.base = mid; Sound.breath(toV(c.position)); }
+    } else if (G.phase === "stand") {
+      const u = THREE.MathUtils.smoothstep(G.t, 0, 1.3), x = pel.position.x, z = pel.position.z;
+      hold(pel, 0.55 + 0.45 * u, 45); hold(c, 0.6 + 0.85 * u, 45);
+      pull(c, x, z, 30); pull(P.head.body, x, z, 20); hold(P.head.body, 0.7 + 0.95 * u, 30);
+      for (const sd of ["L", "R"]) { pull(P["lLeg" + sd].body, x + side.x * (sd === "L" ? 0.12 : -0.12), z + side.z * (sd === "L" ? 0.12 : -0.12), 30); hold(P["lLeg" + sd].body, 0.1 + 0.2 * u, 30); pull(P["uLeg" + sd].body, x + side.x * (sd === "L" ? 0.1 : -0.1), z + side.z * (sd === "L" ? 0.1 : -0.1), 30); hold(P["uLeg" + sd].body, 0.45 + 0.45 * u, 30); }
+      for (const b of [c, pel]) b.angularVelocity.scale(0.85, b.angularVelocity);
+      if (G.t > 1.5) {
+        // up: back to balancing on his feet, wobbly
+        this.getUp = null; this.slumped = false; this.catchT = undefined; this.wallSlump = null; this.downT = 0;
+        this.root.updateMatrixWorld(true);
+        this.startPuppet(toV(c.position), V().set(rand(-1, 1), 0, rand(-1, 1)).normalize());
+        this.balance.mode = "arm"; this.balance.persistent = true; this.balance.shaky = true;
+        this.hands = [];
+      }
+    }
+  }
   // down but alive: he clutches the wound, tries to crawl, pushes up on an arm and collapses, rolls, kicks
   stepWrithe(dt) {
+    if (this.getUp || this.held || this.wallSlump || this.lightlyHurt()) { this.writhe = null; return; }
     if (this.balance || this.dead || this.t < 1.5 || this.lastHitHead || (this.severedParts && this.severedParts.has("head"))) { this.writhe = null; return; }
     const c = this.parts.chest.body, pel = this.parts.pelvis.body;
     if (!this.writhe) {
       if (this.hp < -80 || this.writheDone || c.position.y > 0.45) return;
-      this.writhe = { life: rand(14, 24), act: null, at: 0, next: rand(0.3, 0.9), side: "L" };
+      this.writhe = { life: rand(8, 14), act: null, at: 0, next: rand(0.3, 0.9), side: "L" };
     }
     const Wr = this.writhe; Wr.life -= dt;
     const heart = this.heart ? this.heart.strength : 1;
-    if (Wr.life <= 0 || heart < 0.12) { this.writhe = null; this.writheDone = true; return; }
+    if (Wr.life <= 0 || heart < 0.12) {
+      this.writhe = null; this.writheDone = true;
+      const sd = ["L", "R"].filter(x => !(this.limpArms && this.limpArms.has(x)) && !(this.joints["uArm" + x] && this.joints["uArm" + x].severed));
+      if (sd.length) this.lastBreath = { t: 0, side: sd[(Math.random() * sd.length) | 0] };
+      return;
+    }
     const vigor = Math.min(1, Wr.life / 6) * Math.max(0.3, heart);
     if (this.frozen) this.frozen = false;
     for (const k in this.parts) this.parts[k].body.wakeUp();
@@ -1726,7 +1887,11 @@ class Soldier {
     return best;
   }
   onContact(body, e) {
+    const prop = props.find(p => p.body === e.body);
+    if (prop) { this.wallContact(body, prop, e); return; }
     if (e.body !== ground) return;
+    // a body thrown hard enough into the floor can tear a joint
+    if (Math.abs(e.contact.getImpactVelocityAlongNormal()) > 8) { const n = Object.keys(this.parts).find(k => this.parts[k].body === body); if (/^(uArm|lLeg)/.test(n || "")) this.dislocate(n); }
     const v = Math.abs(e.contact.getImpactVelocityAlongNormal());
     const now = performance.now();
     if (v < 0.7 || now - (body.lastHit || 0) < 300) return;
@@ -1745,9 +1910,50 @@ class Soldier {
         scene.add(sp); puffs.push(sp);
       }
     }
-    else Sound.thud(p, v * body.mass / 7);
+    else {
+      // each part sounds like what it is: helmet, armour, boots, limbs
+      const P = this.parts;
+      if (body === P.head.body) Sound.clank(p, v / 3);
+      else if (body === P.chest.body) { Sound.thud(p, v * body.mass / 7); Sound.rattle(p, v / 3); }
+      else if (body === P.lLegL.body || body === P.lLegR.body) Sound.scuff(p, v / 2.5);
+      else Sound.thud(p, v * body.mass / 9);
+    }
     if (v > 1) Sound.gear(p, Math.min(1.2, v / 3));
     if (v > 0.9) dust(p, heavy ? (v > 2.5 ? 6 : 4) : 2);
+  }
+  // hitting a wall or crate: staggering into one ends with him sliding down it into a sitting slump
+  wallContact(body, prop, e) {
+    const v = Math.abs(e.contact.getImpactVelocityAlongNormal());
+    const P = this.parts, torso = body === P.chest.body || body === P.pelvis.body;
+    const now = performance.now();
+    if (v > 0.8 && now - (body.lastHit || 0) > 250) { body.lastHit = now; const p = toV(body.position); if (body === P.head.body) Sound.clank(p, v / 3); else { Sound.thud(p, v * body.mass / 8); if (torso) Sound.rattle(p, v / 3); } }
+    if (v > 7 && !torso) { const n = Object.keys(P).find(k => P[k].body === body); if (/^(uArm|lLeg)/.test(n || "")) this.dislocate(n); }
+    if (!torso || this.wallSlump || this.held || !this.balance || v < 0.4) return;
+    const cp = toV(P.chest.body.position), l = cp.clone().applyMatrix4(prop.inv); l.clamp(prop.half.clone().negate(), prop.half);
+    const n = cp.clone().sub(l.applyMatrix4(prop.mesh.matrixWorld)).setY(0);
+    if (n.lengthSq() < 1e-4) return;
+    this.wallSlump = { n: n.normalize(), t: 0 };
+    this.endBalance(); this.catchT = 99; this.tone = 0.6;
+    Sound.slump(cp);
+  }
+  stepSlump(dt) {
+    const S = this.wallSlump; if (!S) return;
+    S.t += dt;
+    const P = this.parts, c = P.chest.body, pel = P.pelvis.body, u = THREE.MathUtils.smoothstep(S.t, 0, 2.2);
+    if (!S.base) { const cp = toV(c.position); S.base = cp.clone().setY(0); } // the spot at the foot of the wall he slides down to
+    const spring = (b, x, y, z, kp, kd, w = 1) => b.applyForce(new CANNON.Vec3(b.mass * (kp * (x - b.position.x) - kd * b.velocity.x) * w, b.mass * (9.8 * w + kp * (y - b.position.y) - kd * b.velocity.y) * w, b.mass * (kp * (z - b.position.z) - kd * b.velocity.z) * w));
+    const settle = S.t < 2.6 ? 1 : 0.35; // afterwards a light hold keeps him propped there instead of toppling
+    // back to the wall, sliding down from standing to sitting; hips at the foot of the wall, legs out in front
+    const back = S.base.clone().addScaledVector(S.n, 0.16), hip = S.base.clone().addScaledVector(S.n, 0.3);
+    spring(c, back.x, THREE.MathUtils.lerp(1.0, 0.6, u), back.z, 40, 8, settle * 1.6); // the chest carries the head and arms too
+    spring(pel, hip.x, THREE.MathUtils.lerp(0.9, 0.13, u), hip.z, 18, 6, settle);
+    spring(P.head.body, back.x - S.n.x * 0.02, THREE.MathUtils.lerp(1.5, 0.98, u), back.z - S.n.z * 0.02, 10, 4, settle * 0.6);
+    for (const sd of ["L", "R"]) { const t = S.base.clone().addScaledVector(S.n, 0.75 + 0.1 * u); if (S.t > 0.6) spring(P["lLeg" + sd].body, t.x, 0.1, t.z, 8, 3, 0.5 * settle); }
+    if (S.t < 3.2) for (const kk in P) P[kk].body.wakeUp();
+  }
+  // nothing that would stop him being put to rest while it's going on
+  busy() {
+    return !!(this.writhe || this.getUp || this.held || (this.daze > 0) || (this.wallSlump && this.wallSlump.t < 3.2) || (this.lastBreath && this.lastBreath.t < 3.6) || (this.catchT !== undefined && this.catchT < 1.4));
   }
   // twist limit done right: measure each part's roll relative to its parent *since the hit* and clamp it.
   // the part rotates about its own joint, so the correction never pulls the joint apart.
@@ -1755,7 +1961,7 @@ class Soldier {
     for (const s of SEGS) {
       if (!s.p) continue;
       const c = this.joints[s.n], part = this.parts[s.n], A = this.parts[s.p].body, B = part.body;
-      if (c.severed || B.sleepState === CANNON.Body.SLEEPING) continue;
+      if (c.severed || c.dislocated || B.sleepState === CANNON.Body.SLEEPING) continue;
       const rel = A.quaternion.inverse().mult(B.quaternion);
       const d = c.rest.inverse().mult(rel);                       // change since the hit, in the part's own frame
       const a = part.axis;
@@ -1781,7 +1987,7 @@ class Soldier {
     this.tone = Math.max(0, this.tone - dt / 2.5);
     const k = Math.min(1, this.tone * dt * 14);
     for (const s of SEGS) {
-      if (!s.p || this.joints[s.n].severed) continue;
+      if (!s.p || this.joints[s.n].severed || this.joints[s.n].dislocated) continue;
       const A = this.parts[s.p].body, B = this.parts[s.n].body;
       B.angularVelocity.x += (A.angularVelocity.x - B.angularVelocity.x) * k;
       B.angularVelocity.y += (A.angularVelocity.y - B.angularVelocity.y) * k;
@@ -1789,7 +1995,7 @@ class Soldier {
     }
   }
   update(dt) {
-    if (this.state !== "ragdoll") { this.mixer.update(dt); return; }
+    if (this.state !== "ragdoll") { this.mixer.update(dt); this.stepBrace(dt); return; }
     this.t += dt;
     this.limitTwist();
     this.stepTone(dt);
@@ -1797,7 +2003,12 @@ class Soldier {
     this.stepBalance(dt);
     this.stepGrip();
     this.stepCatch(dt);
+    this.stepSlump(dt);
+    this.stepDaze(dt);
+    this.stepGetUp(dt);
     this.stepWrithe(dt);
+    this.stepLastBreath(dt);
+    this.stepRollRattle(dt);
     for (const k in this.parts) { const { body, group } = this.parts[k]; group.position.copy(body.interpolatedPosition); group.quaternion.copy(body.interpolatedQuaternion); }
     // a bleeding part dragging along the ground leaves a pixel streak behind it
     for (const w of this.wounds) {
@@ -1809,7 +2020,7 @@ class Soldier {
         if (w.trailDist > 0.05) { w.trailDist = 0; splat(wp.x, wp.z, rand(0.05, 0.09)); if (Math.random() < 0.3) pool(wp.x, wp.z, 0.05); }
       }
     }
-    if (!this.balance && this.t > 2 && !this.writhe && !(this.catchT !== undefined && this.catchT < 1.4)) {
+    if (!this.balance && this.t > 2 && !this.busy()) {
       // judge stillness by where a part actually goes, not its speed: a part wedged between the body and the
       // floor can vibrate fast while going nowhere, and that is exactly what should be frozen
       this.stillClock = (this.stillClock || 0) + dt;
@@ -2015,7 +2226,7 @@ function updateBody(realDt, moving) {
   }
   eye.updateMatrixWorld(true);
   const down = V().set(0, -1, 0), l = right.clone().negate();
-  if (weapon !== "sword") {
+  if (weapon === "gravity") {} else if (weapon !== "sword") {
     gun.updateMatrixWorld(true);
     const gq = gun.getWorldQuaternion(new THREE.Quaternion());
     const grip = gun.localToWorld(V().set(...W.grip)), supp = W.pump ? W.parts.slide.localToWorld(V().set(...W.supp)) : gun.localToWorld(V().set(...W.supp));
@@ -2034,6 +2245,89 @@ function updateBody(realDt, moving) {
     handOn("Left", g2, wrapL, bones.LeftArm.getWorldPosition(V()).addScaledVector(down, 0.6).addScaledVector(l, 0.3));
   }
 }
+
+// ================================================================ gravity gun
+const grav = new THREE.Group(); grav.visible = false;
+{
+  const dark = new THREE.MeshStandardMaterial({ color: 0x2b2e33, metalness: 0.85, roughness: 0.35 });
+  const orange = new THREE.MeshStandardMaterial({ color: 0xd8641c, metalness: 0.4, roughness: 0.5 });
+  const glowMat = new THREE.MeshBasicMaterial({ color: 0xffb35a });
+  rbox(grav, [0.07, 0.08, 0.32], [0, 0, 0.02], dark);                      // body
+  rbox(grav, [0.074, 0.03, 0.2], [0, 0.05, 0.04], orange);                 // top shroud
+  rbox(grav, [0.034, 0.11, 0.05], [0, -0.08, 0.1], dark, [-0.25, 0, 0]);   // grip
+  cyl(grav, 0.04, 0.06, [0, 0, -0.15], dark, 24);                          // emitter ring
+  const core = new THREE.Mesh(new THREE.SphereGeometry(0.022, 16, 12), glowMat); core.position.set(0, 0, -0.17); grav.add(core);
+  for (let i = 0; i < 3; i++) { const a = i / 3 * Math.PI * 2 + Math.PI / 2; const pr = rbox(grav, [0.012, 0.012, 0.13], [Math.cos(a) * 0.045, Math.sin(a) * 0.045, -0.24], orange); pr.rotation.set(-Math.sin(a) * 0.35, Math.cos(a) * 0.35, 0); } // prongs
+  for (let i = 0; i < 4; i++) cyl(grav, 0.038, 0.006, [0, 0, -0.06 + i * 0.03], orange, 20); // cooling rings
+  grav.traverse(o => { if (o.isMesh) o.castShadow = true; });
+  grav.userData.core = core;
+}
+eye.add(grav);
+const gravLight = new THREE.PointLight(0xffa040, 0, 2.5); scene.add(gravLight);
+const beamGeo = new THREE.BufferGeometry().setFromPoints([V(), V()]);
+const beam = new THREE.Line(beamGeo, new THREE.LineBasicMaterial({ color: 0xffb060, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false }));
+beam.frustumCulled = false; beam.visible = false; scene.add(beam);
+const G = { held: null, dist: 2.4, kick: 0 };
+function gravRay() {
+  const r = new THREE.Raycaster(); r.setFromCamera(new THREE.Vector2(0, 0), camera); r.far = 25;
+  const meshes = [...hitMeshes.keys()]; for (const m of meshes) { m.boundingSphere = null; m.boundingBox = null; }
+  const h = r.intersectObjects(meshes, false)[0];
+  return h ? { s: hitMeshes.get(h.object), point: h.point, dir: r.ray.direction.clone() } : null;
+}
+function gravGrab() {
+  if (G.held) { gravRelease(); return; }
+  const h = gravRay(); if (!h) { Sound.click(0.25, 1400); return; }
+  const s = h.s;
+  if (s.state === "idle") s.becomeRagdoll(h.point, h.dir, false, false);
+  if (s.balance) s.endBalance();
+  const part = s.nearestPart(h.point);
+  G.held = { s, part }; s.held = true; s.wallSlump = null; s.catchT = 99; s.writhe = null; s.getUp = null; s.frozen = false; s.tone = 0.25;
+  G.dist = THREE.MathUtils.clamp(h.point.distanceTo(camera.position), 1.6, 4);
+  Sound.zap(h.point);
+}
+function gravRelease() { if (!G.held) return; G.held.s.held = false; G.held.s.t = Math.min(G.held.s.t, 1.5); G.held = null; }
+function gravFire() {
+  G.kick = 1;
+  const fwd = V().set(0, 0, -1).applyQuaternion(camera.quaternion);
+  if (G.held) {
+    // launch: the whole body goes, not just the part in the beam
+    const { s, part } = G.held; gravRelease();
+    for (const k in s.parts) { const b = s.parts[k].body, f = k === part ? 26 : 17; b.velocity.x += fwd.x * f; b.velocity.y += fwd.y * f + 2; b.velocity.z += fwd.z * f; b.wakeUp(); }
+    Sound.launch(camera.position); return;
+  }
+  const h = gravRay(); Sound.launch(camera.position);
+  if (!h || h.point.distanceTo(camera.position) > 12) return;
+  const s = h.s; if (s.state === "idle") s.becomeRagdoll(h.point, h.dir, false, false);
+  if (s.balance) s.endBalance();
+  s.frozen = false;
+  const part = s.nearestPart(h.point);
+  for (const k in s.parts) { const b = s.parts[k].body, f = k === part ? 14 : 8; b.velocity.x += fwd.x * f; b.velocity.y += fwd.y * f + 1.5; b.velocity.z += fwd.z * f; b.wakeUp(); }
+}
+function updateGrav(dt) {
+  const core = grav.userData.core;
+  G.kick = Math.max(0, G.kick - dt * 6);
+  grav.position.set(0.19, -0.2, -0.46 + G.kick * 0.06); grav.scale.setScalar(0.8);
+  grav.rotation.set(G.kick * 0.25, 0, 0);
+  core.scale.setScalar(1 + Math.sin(performance.now() * 0.02) * 0.15 + (G.held ? 0.4 : 0));
+  grav.updateMatrixWorld(true);
+  const cw = core.getWorldPosition(V());
+  gravLight.position.copy(cw); gravLight.intensity = grav.visible ? (G.held ? 2.5 : 0.8) + G.kick * 4 : 0;
+  beam.visible = false;
+  if (!G.held) return;
+  const { s, part } = G.held, b = s.parts[part].body;
+  const fwd = V().set(0, 0, -1).applyQuaternion(camera.quaternion);
+  const target = camera.position.clone().addScaledVector(fwd, G.dist);
+  // a stiff damped spring on the held part; the rest of him swings from it
+  for (const k in s.parts) { const pb = s.parts[k].body; pb.wakeUp(); pb.velocity.scale(0.985, pb.velocity); }
+  b.velocity.x += (( target.x - b.position.x) * 12 - b.velocity.x) * Math.min(1, dt * 12);
+  b.velocity.y += (( target.y - b.position.y) * 12 - b.velocity.y) * Math.min(1, dt * 12);
+  b.velocity.z += (( target.z - b.position.z) * 12 - b.velocity.z) * Math.min(1, dt * 12);
+  // R spins him in the air
+  if (keys.KeyR) { const c = s.parts.chest.body; c.angularVelocity.x += fwd.x * 18 * dt; c.angularVelocity.y += fwd.y * 18 * dt + 10 * dt; c.angularVelocity.z += fwd.z * 18 * dt; }
+  beam.visible = true; beamGeo.attributes.position.setXYZ(0, cw.x, cw.y, cw.z); beamGeo.attributes.position.setXYZ(1, b.position.x, b.position.y, b.position.z); beamGeo.attributes.position.needsUpdate = true;
+  if (b.position.distanceTo(new CANNON.Vec3(target.x, target.y, target.z)) > 5) gravRelease(); // stuck behind something: let go
+}
+addEventListener("wheel", e => { if (weapon === "gravity" && G.held) G.dist = THREE.MathUtils.clamp(G.dist - Math.sign(e.deltaY) * 0.25, 1.4, 6); });
 
 // ================================================================ player, input, shooting
 const player = { pos: new THREE.Vector3(0, 0, 0), vel: V(), yaw: 0, pitch: -0.05, recoil: 0, recoilYaw: 0, onGround: true };
@@ -2055,9 +2349,11 @@ const sw = { kind: null, t: 0, dir: -1, hitParts: new Set(), prev: [], recover: 
 function setWeapon(w) {
   if (weapon === w || gs.reloading) return;
   weapon = w;
-  gun.visible = w !== "sword"; sword.visible = w === "sword";
-  if (w !== "sword") selectGun(w);
-  document.getElementById("ammo").style.visibility = w !== "sword" ? "visible" : "hidden";
+  const isGun = w !== "sword" && w !== "gravity";
+  gun.visible = isGun; sword.visible = w === "sword"; grav.visible = w === "gravity";
+  if (isGun) selectGun(w);
+  if (w !== "gravity") gravRelease();
+  document.getElementById("ammo").style.visibility = isGun ? "visible" : "hidden";
   sw.kind = null; aiming = false;
 }
 function swordAttack(kind) {
@@ -2069,6 +2365,7 @@ function swordAttack(kind) {
 document.addEventListener("mousedown", e => {
   if (!locked) return;
   if (weapon === "sword") { if (e.button === 0) swordAttack("slash"); if (e.button === 2) swordAttack("stab"); return; }
+  if (weapon === "gravity") { if (e.button === 0) gravFire(); if (e.button === 2) gravGrab(); return; }
   if (e.button === 0) { firing = true; shoot(); } if (e.button === 2) aiming = true;
 });
 document.addEventListener("mouseup", e => { if (e.button === 2) aiming = false; if (e.button === 0) firing = false; });
@@ -2076,11 +2373,12 @@ document.addEventListener("contextmenu", e => e.preventDefault());
 document.addEventListener("keydown", e => {
   keys[e.code] = true;
   if (!locked) return;
-  if (e.code === "KeyR" && weapon !== "sword") reload();
+  if (e.code === "KeyR" && weapon !== "sword" && weapon !== "gravity") reload();
   if (e.code === "Digit1") setWeapon("pistol");
   if (e.code === "Digit2") setWeapon("rifle");
   if (e.code === "Digit3") setWeapon("shotgun");
   if (e.code === "Digit4") setWeapon("sword");
+  if (e.code === "Digit5") setWeapon("gravity");
   if (e.code === "KeyE") spawnTarget();
   if (e.code === "KeyQ") slowmo = !slowmo;
   if (e.code === "Space" && player.onGround) { player.vel.y = 4.2; player.onGround = false; }
@@ -2139,7 +2437,7 @@ function fireRay(perSoldier) {
   const count = (perSoldier.get(s) || 0) + 1; perSoldier.set(s, count);
   if (count > 3) { redMist(hit.point, dir, 0.6); spray(hit.point, dir, 14, 3.5, 0.5); hitEl.style.opacity = 1; hitT = 0.12; return; }
   const hd = hit.point.distanceTo(eye.position); // range from the shooter, not the camera behind him
-  const res = s.hit(hit.point, n, dir, { pen: W.pen, dist: hd });
+  const res = s.hit(hit.point, n, dir, { pen: W.pen, dist: hd, heavy: (W.pellets > 1 && hd < 6) || (W === GUNS.rifle && Math.random() < 0.3) });
   if (res === "armor") { hitEl.style.opacity = 1; hitT = 0.12; return; }
   // the bullet comes out the other side
   s.exitWound(hit.point, dir);
@@ -2310,7 +2608,8 @@ function update(realDt) {
   gs.bob += realDt * moving * 1.7;
   gs.kickV += (-gs.kick * 400 - gs.kickV * 25) * realDt; gs.kick += gs.kickV * realDt;
   gs.slide = Math.max(0, gs.slide - realDt * 14);
-  if (firing && W.auto && weapon !== "sword" && locked) shoot();
+  if (firing && W.auto && weapon !== "sword" && weapon !== "gravity" && locked) shoot();
+  updateGrav(realDt);
   const offs = firstPerson ? W.fps : W.tps;
   const base = new THREE.Vector3(...offs[0]).lerp(new THREE.Vector3(...offs[1]), gs.ads);
   const bob = (1 - gs.ads * 0.85) * Math.min(1, moving / 4);
@@ -2444,7 +2743,7 @@ new GLTFLoader().load("models/Soldier.glb", g => {
 loop();
 
 // testing hooks
-window.__game = { setFP: v => { firstPerson = v; }, me: () => me, eye, scene, renderer, sw, sword, setWeapon: w => setWeapon(w), swordAttack: k => swordAttack(k), player, soldiers, camera, shoot: () => { gs.cd = 0; shoot(); }, update, render, spawnTarget };
+window.__game = { sync: () => { for (const s of soldiers) s.pose(); scene.updateMatrixWorld(); }, gravGrab, gravFire, G, setFP: v => { firstPerson = v; }, me: () => me, eye, scene, renderer, sw, sword, setWeapon: w => setWeapon(w), swordAttack: k => swordAttack(k), player, soldiers, camera, shoot: () => { gs.cd = 0; shoot(); }, update, render, spawnTarget };
 </script>
 </body>
 </html>
