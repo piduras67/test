@@ -34,7 +34,7 @@
 <div id="hud">
   <div id="dot"></div>
   <div id="hit"></div>
-  <div id="help">1 pistol &nbsp;·&nbsp; 2 rifle &nbsp;·&nbsp; 3 shotgun &nbsp;·&nbsp; 4 sword &nbsp;·&nbsp; V first / third person &nbsp;·&nbsp; LMB fire / slash &nbsp;·&nbsp; RMB aim / stab &nbsp;·&nbsp; R reload &nbsp;·&nbsp; E new target &nbsp;·&nbsp; Q slow motion</div>
+  <div id="help">1 pistol &nbsp;·&nbsp; 2 rifle &nbsp;·&nbsp; 3 shotgun &nbsp;·&nbsp; 4 sword &nbsp;·&nbsp; LMB fire / slash &nbsp;·&nbsp; RMB aim / stab &nbsp;·&nbsp; R reload &nbsp;·&nbsp; E new target &nbsp;·&nbsp; Q slow motion</div>
   <div id="ammo"><b id="mag">12</b> / <span id="magSize">12</span></div>
 </div>
 <div id="start"><div><div class="t" id="startText">Loading…</div><div class="s">WASD to move</div></div></div>
@@ -1970,7 +1970,7 @@ function updateBody(realDt, moving) {
 // ================================================================ player, input, shooting
 const player = { pos: new THREE.Vector3(0, 0, 0), vel: V(), yaw: 0, pitch: -0.05, recoil: 0, recoilYaw: 0, onGround: true };
 const keys = {};
-let locked = false, aiming = false, slowmo = false, firing = false, firstPerson = false;
+let locked = false, aiming = false, slowmo = false, firing = false, firstPerson = true; // first person only
 const gs = { cd: 0, kick: 0, kickV: 0, slide: 0, swayX: 0, swayY: 0, bob: 0, ads: 0, reloading: false, rt: 0, stage: 0, step: 0 };
 const startEl = document.getElementById("start");
 startEl.addEventListener("click", () => { if (!MODEL) return; Sound.init(); renderer.domElement.requestPointerLock(); });
@@ -2013,7 +2013,6 @@ document.addEventListener("keydown", e => {
   if (e.code === "Digit2") setWeapon("rifle");
   if (e.code === "Digit3") setWeapon("shotgun");
   if (e.code === "Digit4") setWeapon("sword");
-  if (e.code === "KeyV") firstPerson = !firstPerson;
   if (e.code === "KeyE") spawnTarget();
   if (e.code === "KeyQ") slowmo = !slowmo;
   if (e.code === "Space" && player.onGround) { player.vel.y = 4.2; player.onGround = false; }
@@ -2370,7 +2369,7 @@ new GLTFLoader().load("models/Soldier.glb", g => {
   const span = head.getWorldPosition(V()).y - foot.getWorldPosition(V()).y;
   MODEL_SCALE = span > 0.01 ? 1.8 * 0.85 / span : 1;
   new Soldier(0, -6.4, Math.PI); // in front of the wall
-  makePlayerBody(); selectGun("pistol");
+  selectGun("pistol"); // no player body: just the weapons in front of the camera
   document.getElementById("startText").textContent = "Click to start";
   setTimeout(() => (document.getElementById("help").style.opacity = 0), 9000);
 }, undefined, e => { document.getElementById("startText").textContent = location.protocol === "file:" ? "Run start.bat to open this through localhost" : "Couldn't load the soldier model"; });
