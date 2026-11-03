@@ -50,7 +50,6 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
-import { GTAOPass } from "three/addons/postprocessing/GTAOPass.js";
 
 const rand = (a, b) => a + Math.random() * (b - a);
 // blood switch: false turns off every blood effect (drops, splats, pools, stains, wall runs, gibs). set to true to bring it back.
@@ -59,7 +58,7 @@ const V = () => new THREE.Vector3();
 
 // ================================================================ renderer, sky, light
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.25));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -98,11 +97,11 @@ scene.fog = new THREE.FogExp2(0xcfc6b8, 0.0028); // a little haze for depth
 const sunLight = new THREE.DirectionalLight(0xffe2bf, 3.6);
 sunLight.position.copy(sun).multiplyScalar(40);
 sunLight.castShadow = true;
-sunLight.shadow.mapSize.set(4096, 4096);
+sunLight.shadow.mapSize.set(2048, 2048);
 Object.assign(sunLight.shadow.camera, { left: -22, right: 22, top: 22, bottom: -22, near: 1, far: 140 });
 sunLight.shadow.bias = -0.00025;
 sunLight.shadow.normalBias = 0.025;
-sunLight.shadow.radius = 4; sunLight.shadow.blurSamples = 16;
+sunLight.shadow.radius = 4;
 scene.add(sunLight, sunLight.target);
 scene.add(new THREE.HemisphereLight(0xd6dcE6, 0x5a4c3e, 0.22));
 renderer.toneMappingExposure = 0.6;
@@ -219,14 +218,8 @@ scene.add(plate);
 }
 
 // ================================================================ post-processing
-const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth * renderer.getPixelRatio(), innerHeight * renderer.getPixelRatio(), { type: THREE.HalfFloatType, samples: 4 }));
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth * renderer.getPixelRatio(), innerHeight * renderer.getPixelRatio(), { type: THREE.HalfFloatType, samples: 2 }));
 composer.addPass(new RenderPass(scene, camera));
-// contact shadows in every crease: under the body, where walls meet the floor, between the crates
-const gtao = new GTAOPass(scene, camera, innerWidth, innerHeight);
-gtao.updateGtaoMaterial({ radius: 0.45, distanceExponent: 1.6, thickness: 1.2, scale: 1.1, samples: 16 });
-gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 16 });
-gtao.blendIntensity = 1.0;
-composer.addPass(gtao);
 const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.18, 0.55, 0.9);
 composer.addPass(bloom);
 composer.addPass(new ShaderPass({
@@ -253,7 +246,7 @@ composer.addPass(new OutputPass());
 
 addEventListener("resize", () => {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight); composer.setSize(innerWidth, innerHeight); gtao.setSize(innerWidth, innerHeight);
+  renderer.setSize(innerWidth, innerHeight); composer.setSize(innerWidth, innerHeight);
 });
 
 // ================================================================ sound (synthesised, no files)
