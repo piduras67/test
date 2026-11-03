@@ -792,8 +792,11 @@ function bulletHole(point, normal, size, parent) {
 const gibGeo = (() => { const g = new THREE.IcosahedronGeometry(0.6, 1), p = g.attributes.position; for (let i = 0; i < p.count; i++) { const k = 0.7 + Math.random() * 0.5; p.setXYZ(i, p.getX(i) * k, p.getY(i) * k * 0.8, p.getZ(i) * k); } g.computeVertexNormals(); return g; })();
 const gibMats = ["#4a0505", "#6a0b0b", "#8c1a17", "#b0524a", "#e0d4c0"].map((c, i) => new THREE.MeshPhysicalMaterial({ color: c, roughness: i === 4 ? 0.5 : 0.28, clearcoat: i === 4 ? 0.2 : 0.5, clearcoatRoughness: 0.15, envMapIntensity: 0.25 }));
 const gibs = [];
+const fleshTex = (() => { const n = 128, c = document.createElement("canvas"); c.width = c.height = n; const g = c.getContext("2d"); g.fillStyle = "#5a0b0b"; g.fillRect(0, 0, n, n); for (let i = 0; i < 260; i++) { const r = rand(2, 9); g.fillStyle = `rgba(${rand(90, 170) | 0},${rand(10, 35) | 0},${rand(12, 30) | 0},${rand(0.3, 0.8)})`; g.beginPath(); g.arc(rand(0, n), rand(0, n), r, 0, 7); g.fill(); } for (let i = 0; i < 40; i++) { g.strokeStyle = `rgba(220,190,170,${rand(0.1, 0.35)})`; g.lineWidth = rand(0.5, 1.5); g.beginPath(); const x = rand(0, n), y = rand(0, n); g.moveTo(x, y); g.lineTo(x + rand(-20, 20), y + rand(-20, 20)); g.stroke(); } const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; return t; })();
+const craterMat = new THREE.MeshPhysicalMaterial({ map: fleshTex, color: 0xffffff, roughness: 0.32, clearcoat: 0.8, clearcoatRoughness: 0.15, envMapIntensity: 0.3, side: THREE.DoubleSide });
+const rimMat = new THREE.MeshPhysicalMaterial({ color: 0x3a0505, roughness: 0.35, clearcoat: 0.6, envMapIntensity: 0.2, transparent: true, opacity: 0.9, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -6, side: THREE.DoubleSide });
 function pixelGibs(point, dir, count) {
-  if (!BLOOD) return;
+  return; // loose gore chunks are off: only the chunk a shot actually takes out of the body flies (see chunkOut)
   count = Math.round(count * 1.5);
   for (let i = 0; i < count; i++) {
     const m = new THREE.Mesh(gibGeo, gibMats[Math.random() < 0.2 ? 4 : (Math.random() * 4) | 0]); // bone fragments among the meat
@@ -1171,7 +1174,7 @@ class Soldier {
     const imp = dir.clone().multiplyScalar((kind === "stab" ? 22 : 14) * power);
     part.body.applyImpulse(new CANNON.Vec3(imp.x, imp.y * 0.6, imp.z), new CANNON.Vec3(point.x - part.body.position.x, point.y - part.body.position.y, point.z - part.body.position.z));
     if (kind === "slash" && power > 1.1 && /^(uArm|lLeg)/.test(partName) && Math.random() < 0.35) this.dislocate(partName);
-    if (kind === "stab") { redMist(point, dir, 0.8); Sound.stab(point); this.hp -= 30; decalOn(part.group, exitMat, point, normal, 0.05, 0.05); return; }
+    if (kind === "stab") { this.chunkOut(point, normal, dir, 0.8); redMist(point, dir, 0.8); Sound.stab(point); this.hp -= 30; decalOn(part.group, exitMat, point, normal, 0.05, 0.05); return; }
     Sound.slice(point);
     // the cut itself, laid along the line the blade travelled across him
     {
@@ -1193,7 +1196,7 @@ class Soldier {
     const target = partName === "chest" && this.neckHit(point, dir) ? "head" : partName;
     if (!(target in this.limbHp)) return;
     this.limbHp[target] -= 24 * power + 10;
-    if (this.limbHp[target] <= 0) this.sever(target, dir);
+    // (no cutting limbs off)
   }
   // cut a part (and everything below it) off at its joint
   sever(name, dir) {
@@ -1303,6 +1306,7 @@ class Soldier {
   }
   // plates on the chest and back, and the helmet: the face, neck, gut, sides and limbs are the gaps
   armored(point, normal, R) {
+    return false; // a suit stops nothing
     const { up, side, fwd } = this.bodyAxes();
     if (R.mode === "chest") {
       const facing = Math.abs(normal.dot(fwd)), height = point.clone().sub(this.boneWorld("Spine1")).dot(up);
@@ -1333,6 +1337,7 @@ class Soldier {
     const h = rc.intersectObjects(meshes, false)[0];
     if (!h || h.point.distanceTo(point) < 0.05) return;
     this.addSoak(h, 1.4); // exits bleed more
+    if (Math.random() < 0.6) this.chunkOut(h.point, dir.clone(), dir, 1.3);
     const n = dir.clone(); const region = this.nearestPart(h.point), part = this.parts[region];
     if (!part) return;
     decalOn(part.group, exitMat, h.point, n, rand(0.06, 0.09), rand(0.06, 0.09));
@@ -1343,6 +1348,79 @@ class Soldier {
     wound.quaternion.copy(part.group.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(new THREE.Quaternion().setFromUnitVectors(UPV, n)));
     part.group.add(wound);
     this.bleed.push({ obj: wound, t: 0, dur: 14, rate: 26 });
+  }
+  // a shot tears a chunk out of him: the real skin and clothing around the hit are cut away (a ragged, random shape),
+  // the piece flies off, and what's left is a wet crater. works on every layer (clothes and the body under them).
+  chunkOut(point, normal, dir, scale = 1) {
+    if (!this.parts.chest) return;
+    const n = normal.clone().normalize();
+    const R0 = rand(0.022, 0.05) * scale * (Math.random() < 0.2 ? 1.6 : 1); // now and then a big one
+    const t1 = new THREE.Vector3(1, 0, 0).cross(n); if (t1.lengthSq() < 0.01) t1.set(0, 0, 1).cross(n); t1.normalize();
+    const t2 = n.clone().cross(t1), seed = rand(0, 100), lobes = 3 + ((Math.random() * 3) | 0);
+    const rAt = d => { const a = Math.atan2(d.dot(t2), d.dot(t1)); return R0 * (0.88 + 0.1 * Math.sin(a * lobes + seed) + 0.07 * Math.sin(a * 7 + seed * 2.3) + 0.04 * Math.sin(a * 13 + seed * 0.7)); };
+    const removed = [];
+    const vw = new THREE.Vector3(), d = new THREE.Vector3();
+    this.root.traverse(m => {
+      if (!m.isSkinnedMesh) return;
+      if (!m.userData.ownGeo) { m.geometry = m.geometry.clone(); m.userData.ownGeo = true; }
+      const g = m.geometry, pos = g.attributes.position, si = g.attributes.skinIndex, sw = g.attributes.skinWeight;
+      // cheap pre-filter: a vertex can only be in the hole if its main bone is near the hit
+      if (!m.userData.mainBone) { const mb = new Uint8Array(pos.count); for (let v = 0; v < pos.count; v++) { let best = 0, bw = -1; for (let c = 0; c < 4; c++) { const w = sw.getComponent ? sw.getComponent(v, c) : [sw.getX(v), sw.getY(v), sw.getZ(v), sw.getW(v)][c]; if (w > bw) { bw = w; best = [si.getX(v), si.getY(v), si.getZ(v), si.getW(v)][c]; } } mb[v] = best; } m.userData.mainBone = mb; }
+      const near = m.skeleton.bones.map(b => b.getWorldPosition(new THREE.Vector3()).distanceTo(point) < 0.55);
+      // world positions of the candidate vertices; a triangle goes if its centre is inside the (ragged) wound outline
+      const W = new Float32Array(pos.count * 3).fill(NaN); let any = false;
+      for (let v = 0; v < pos.count; v++) {
+        if (!near[m.userData.mainBone[v]]) continue;
+        m.localToWorld(m.getVertexPosition(v, vw));
+        W[v * 3] = vw.x; W[v * 3 + 1] = vw.y; W[v * 3 + 2] = vw.z; any = true;
+      }
+      if (!any) return;
+      if (!g.index) { const c = pos.count, idx = new Uint32Array(c); for (let i = 0; i < c; i++) idx[i] = i; g.setIndex(new THREE.BufferAttribute(idx, 1)); }
+      const src = g.index.array, keep = [], cut = [];
+      for (let i = 0; i < src.length; i += 3) {
+        const a = src[i] * 3, b = src[i + 1] * 3, c = src[i + 2] * 3;
+        let inside = false;
+        if (W[a] === W[a] && W[b] === W[b] && W[c] === W[c]) {
+          d.set((W[a] + W[b] + W[c]) / 3, (W[a + 1] + W[b + 1] + W[c + 1]) / 3, (W[a + 2] + W[b + 2] + W[c + 2]) / 3).sub(point);
+          const dn = d.dot(n);
+          if (dn > -R0 * 1.8 && dn < R0 * 1.2) { const tang = d.clone().addScaledVector(n, -dn); inside = tang.length() < rAt(tang); } // near surface only, not his far side
+        }
+        (inside ? cut : keep).push(src[i], src[i + 1], src[i + 2]);
+      }
+      if (!cut.length) return;
+      g.setIndex(keep);
+      removed.push({ m, cut });
+    });
+    // the crater: a ragged wet bowl of flesh where the piece was
+    const part = this.parts[this.nearestPart(point)];
+    const bowl = new THREE.SphereGeometry(R0 * 1.3 + 0.012, 20, 8, 0, Math.PI * 2, 0, Math.PI / 2), bp = bowl.attributes.position;
+    for (let i = 0; i < bp.count; i++) { const x = bp.getX(i), y = bp.getY(i), z = bp.getZ(i), a = Math.atan2(z, x), k = (0.88 + 0.1 * Math.sin(a * lobes + seed) + 0.07 * Math.sin(a * 7 + seed * 2.3) + 0.04 * Math.sin(a * 13 + seed * 0.7)) / 1.0, j = rand(0.94, 1.06); bp.setXYZ(i, x * k * j, y * rand(0.75, 0.95), z * k * j); }
+    bowl.computeVertexNormals();
+    const crater = new THREE.Mesh(bowl, craterMat); crater.castShadow = false;
+    crater.position.copy(point).addScaledVector(n, R0 * 0.35 + 0.006);
+    crater.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), n.clone().negate());
+    part.group.updateMatrixWorld(true); part.group.attach(crater);
+    // a darker torn rim of cloth/skin edge around it
+    const rim = new THREE.Mesh(new THREE.RingGeometry(R0 * 1.0, R0 * 1.45 + 0.012, 40, 1), rimMat);
+    const rp = rim.geometry.attributes.position; for (let i = 0; i < rp.count; i++) { const x = rp.getX(i), y = rp.getY(i), a = Math.atan2(y, x), k = 0.88 + 0.1 * Math.sin(a * lobes + seed) + 0.07 * Math.sin(a * 7 + seed * 2.3) + 0.04 * Math.sin(a * 13 + seed * 0.7); const j = rand(0.97, 1.03); rp.setXY(i, x * k * j, y * k * j); }
+    rim.position.copy(point).addScaledVector(n, 0.004); rim.lookAt(rim.position.clone().add(n)); part.group.attach(rim);
+    // the piece itself: the cut-away skin/cloth, backed with flesh, flying out along the shot
+    const chunk = new THREE.Group(); const centre = point.clone().addScaledVector(n, -R0 * 0.3);
+    for (const { m, cut } of removed) {
+      if (!cut.length) continue;
+      const pos = [], uvs = [], uv = m.geometry.attributes.uv;
+      for (const i of cut) { m.localToWorld(m.getVertexPosition(i, vw)); pos.push(vw.x - centre.x, vw.y - centre.y, vw.z - centre.z); if (uv) uvs.push(uv.getX(i), uv.getY(i)); }
+      const cg = new THREE.BufferGeometry(); cg.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); if (uv) cg.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2)); cg.computeVertexNormals();
+      const mat = [].concat(m.material)[0].clone(); mat.side = THREE.DoubleSide; mat.onBeforeCompile = () => {};
+      chunk.add(new THREE.Mesh(cg, mat));
+    }
+    const meat = new THREE.Mesh(gibGeo, craterMat); meat.scale.setScalar(R0 * 1.3); meat.position.addScaledVector(n, -R0 * 0.2); chunk.add(meat);
+    chunk.traverse(o => { if (o.isMesh) o.castShadow = true; });
+    chunk.position.copy(centre); scene.add(chunk);
+    const throwDir = dir.clone().negate().lerp(n, 0.5).normalize(); // a chunk blown back out of the entry, or out the exit along the shot
+    chunk.userData = { v: (scale > 1.2 ? dir.clone() : throwDir).multiplyScalar(rand(2.5, 5.5)).add(new THREE.Vector3(rand(-1, 1), rand(0.8, 2.5), rand(-1, 1))), spin: new THREE.Vector3(rand(-15, 15), rand(-15, 15), rand(-15, 15)), size: R0 * 2, landed: false, rest: false, trail: 0 };
+    gibs.push(chunk); if (gibs.length > 120) scene.remove(gibs.shift());
+    spray(point, n, 30, 2.5, 0.6, 0.005, 0.013); redMist(point, n, 1.2);
   }
   // the triangles weighted to a bone (and everything below it) are removed: that piece of him is gone
   removeMeshUnder(rootBone) {
@@ -1444,7 +1522,7 @@ class Soldier {
       const part = R.mode === "neck" ? "head" : region;
       if (part in this.limbHp && !(this.joints[part] && this.joints[part].severed)) {
         this.limbHp[part] -= (opts.dmg || 18) * (opts.dist !== undefined && opts.dist < 4 ? 1.5 : 1);
-        if (this.limbHp[part] <= 0) { if (part === "head" && Math.random() < 0.5) { this.lastHitHead = true; this.blowOffAt(this.boneWorld("Head"), dir); } else this.sever(part, dir); pixelGibs(point, dir, 10); }
+        // (limbs no longer come off)
       }
     }
     // a heavy hit can pop a shoulder or a knee
@@ -2465,8 +2543,8 @@ function explode(barrel) {
     for (const k in s.parts) { const b = s.parts[k].body, p = toV(b.position), off = p.clone().sub(at), dist = Math.max(0.3, off.length()), f = 26 / (dist * dist + 0.6);
       b.velocity.x += off.x / dist * f; b.velocity.y += off.y / dist * f + f * 0.6; b.velocity.z += off.z / dist * f; b.angularVelocity.set(rand(-12, 12), rand(-12, 12), rand(-12, 12)); b.wakeUp(); }
     const tear = d < 1.6 ? 1 : d < 3 ? 0.5 : 0;
-    for (const k of ["uArmL", "uArmR", "lArmL", "lArmR", "uLegL", "uLegR", "lLegL", "lLegR"]) if (Math.random() < tear * (k.startsWith("l") ? 0.6 : 0.7)) s.sever(k, s.boneWorld(k.includes("Arm") ? (k.endsWith("L") ? "LeftArm" : "RightArm") : (k.endsWith("L") ? "LeftUpLeg" : "RightUpLeg")).sub(at).normalize());
-    if (d < 1.6) { s.lastHitHead = true; s.blowOffAt(s.boneWorld("Head"), s.boneWorld("Head").sub(at).normalize()); pixelGibs(hips, hips.clone().sub(at).normalize(), 30); spray(hips, V().set(0, 1, 0), 150, 6, 1.2, 0.006, 0.02); }
+    if (false) for (const k of []) s.sever(k, s.boneWorld(k.includes("Arm") ? (k.endsWith("L") ? "LeftArm" : "RightArm") : (k.endsWith("L") ? "LeftUpLeg" : "RightUpLeg")).sub(at).normalize());
+    if (d < 1.6) { spray(hips, V().set(0, 1, 0), 150, 6, 1.2, 0.006, 0.02); for (let i = 0; i < 3; i++) { const k = ["chest", "pelvis", "uLegL", "uLegR", "uArmL", "uArmR"][(Math.random() * 6) | 0], b = s.parts[k].body, pp = toV(b.position), n = pp.clone().sub(at).normalize(); s.chunkOut(pp.clone().addScaledVector(n.clone().negate(), 0.08), n.clone().negate(), n, 1.4); } }
     if (d < 2.5) { s.dead = true; s.hp = -999; }
   }
   // chain reactions
@@ -2588,7 +2666,8 @@ function fireRay(perSoldier) {
   // the bullet comes out the other side
   s.exitWound(hit.point, dir);
   // close enough, a gun takes a hand or the top of the head off
-  if (hd < W.blow) s.blowOffAt(hit.point, dir);
+  // a chunk comes out where it went in, and (randomly) a bigger one where it comes out
+  s.chunkOut(hit.point, n, dir, W.pellets > 1 ? 0.7 : W === GUNS.rifle ? 1.15 : 1);
   // close shots and headshots throw chunks
   if (hd < 3.2 || s.lastHitHead) pixelGibs(hit.point, dir, s.lastHitHead ? 22 : 9);
   // the bullet carries on out the back and spatters whatever is behind him
