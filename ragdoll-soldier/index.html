@@ -308,7 +308,7 @@ const PIXEL_REDS = ["#3d0404", "#5e0707", "#86100c", "#a8170f"];
 const PIXEL_COLORS = PIXEL_REDS.map(c => new THREE.Color(c));
 const bloodMat = new THREE.MeshPhysicalMaterial({ color: 0xffffff, emissive: 0x1a0000, roughness: 0.18, metalness: 0, clearcoat: 0.6, clearcoatRoughness: 0.1, envMapIntensity: 0.18 });
 const LIQUID_COLORS = ["#5a0404", "#6e0606", "#7f0a08", "#640505"].map(c => new THREE.Color(c));
-const MAX_DROPS = 4500;
+const MAX_DROPS = 14000;
 const dropMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 2), bloodMat, MAX_DROPS);
 for (let i = 0; i < MAX_DROPS; i++) dropMesh.setColorAt(i, LIQUID_COLORS[i % LIQUID_COLORS.length]);
 dropMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -324,7 +324,7 @@ function drop(pos, vel, r) {
   const k = dropCursor;
   const d = drops[dropCursor]; dropCursor = (dropCursor + 1) % MAX_DROPS;
 
-  d.on = true; d.p.copy(pos); d.v.copy(vel); d.r = r; d.life = 3;
+  d.on = true; d.p.copy(pos); d.v.copy(vel); d.r = r; d.life = 12;
 }
 function spray(pos, dir, n, speed, spread, rMin = 0.004, rMax = 0.014) {
   const v = V();
@@ -363,17 +363,26 @@ function splatTexture() {
 }
 const wetDecal = map => new THREE.MeshPhysicalMaterial({ map, emissive: 0x1c0000, color: 0xc8c8c8, roughness: 0.22, clearcoat: 0.5, clearcoatRoughness: 0.12, envMapIntensity: 0.15, transparent: true, alphaTest: 0.08, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
 const splatMats = [0, 1, 2, 3, 4, 5, 6, 7].map(() => wetDecal(splatTexture()));
-const splatGeo = new THREE.PlaneGeometry(1, 1); splatGeo.rotateX(-Math.PI / 2);
-const splats = [];
+const DECALS_PER = 2500; // per texture: 20,000 splats in all before the oldest start to go
+const decalSets = splatMats.map(mat => {
+  const im = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), mat, DECALS_PER);
+  im.count = 0; im.frustumCulled = false; im.receiveShadow = true; im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  scene.add(im); return { im, next: 0 };
+});
+let decalN = 0;
+const _dm = new THREE.Matrix4(), _dq = new THREE.Quaternion(), _ds = new THREE.Vector3(), _dz = new THREE.Vector3(0, 0, 1);
+function addDecal(pos, normal, spin, sx, sy) {
+  const set = decalSets[(Math.random() * decalSets.length) | 0];
+  _dq.setFromUnitVectors(_dz, normal).multiply(new THREE.Quaternion().setFromAxisAngle(_dz, spin));
+  _dm.compose(pos, _dq, _ds.set(sx, sy, 1));
+  set.im.setMatrixAt(set.next, _dm); set.next = (set.next + 1) % DECALS_PER;
+  set.im.count = Math.max(set.im.count, set.next === 0 ? DECALS_PER : set.next);
+  set.im.instanceMatrix.needsUpdate = true;
+  decalN++;
+}
 function splat(x, z, size, stretchDir) {
   if (!BLOOD) return;
-  const m = new THREE.Mesh(splatGeo, splatMats[(Math.random() * splatMats.length) | 0]);
-  m.position.set(x, 0.002 + splats.length % 20 * 0.00005, z);
-  m.rotation.y = stretchDir !== undefined ? stretchDir : rand(0, Math.PI * 2);
-  m.scale.set(size * (stretchDir !== undefined ? 1.8 : 1), 1, size);
-  m.receiveShadow = true;
-  scene.add(m); splats.push(m);
-  if (splats.length > 350) scene.remove(splats.shift());
+  addDecal(new THREE.Vector3(x, 0.002 + (decalN % 40) * 0.00004, z), UPV, stretchDir !== undefined ? stretchDir : rand(0, Math.PI * 2), size * (stretchDir !== undefined ? 1.8 : 1), size);
 }
 // a pixel splat stuck to a prop's face; on a vertical face the blood also runs down in a pixel streak
 const runs = [];
@@ -386,12 +395,7 @@ const runTex = (() => {
 const runMat = new THREE.MeshPhysicalMaterial({ emissive: 0x1c0000, color: 0xc0c0c0, map: runTex, roughness: 0.2, clearcoat: 0.5, clearcoatRoughness: 0.1, envMapIntensity: 0.15, transparent: true, alphaTest: 0.1, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -5 });
 function surfaceSplat(point, normal, size) {
   if (!BLOOD) return;
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(size, size), splatMats[(Math.random() * splatMats.length) | 0]);
-  m.position.copy(point).addScaledVector(normal, 0.004);
-  m.lookAt(point.clone().add(normal));
-  m.rotateZ(rand(0, Math.PI * 2));
-  scene.add(m); splats.push(m);
-  if (splats.length > 350) scene.remove(splats.shift());
+  addDecal(point.clone().addScaledVector(normal, 0.004 + (decalN % 40) * 0.00004), normal, rand(0, Math.PI * 2), size, size);
   if (Math.abs(normal.y) < 0.3 && size > 0.06 && Math.random() < 0.7) {
     const geo = new THREE.PlaneGeometry(size * 0.3, 1); geo.translate(0, -0.5, 0);
     const r = new THREE.Mesh(geo, runMat);
@@ -400,7 +404,7 @@ function surfaceSplat(point, normal, size) {
     r.scale.y = 0.001;
     r.userData = { len: Math.min(point.y - 0.02, rand(0.15, 0.7) * (size * 6)), speed: rand(0.03, 0.08) };
     scene.add(r); runs.push(r);
-    if (runs.length > 80) scene.remove(runs.shift());
+    if (runs.length > 600) scene.remove(runs.shift());
   }
 }
 // which prop face (if any) a point is inside, and that face's outward normal
@@ -611,7 +615,7 @@ function pixelGibs(point, dir, count) {
     m.scale.setScalar(size); m.position.copy(point); m.castShadow = true;
     m.userData = { v: dir.clone().multiplyScalar(rand(1.5, 4.5)).add(new THREE.Vector3(rand(-1.6, 1.6), rand(0.8, 3.2), rand(-1.6, 1.6))), spin: new THREE.Vector3(rand(-14, 14), rand(-14, 14), rand(-14, 14)), size, landed: false, rest: false, trail: 0 };
     scene.add(m); gibs.push(m);
-    if (gibs.length > 160) scene.remove(gibs.shift());
+    if (gibs.length > 500) scene.remove(gibs.shift());
   }
 }
 function updateGibs(dt) {
@@ -671,7 +675,9 @@ function rbox(parent, size, pos, mat, rot) {
   const m = new THREE.Mesh(new RoundedBoxGeometry(size[0], size[1], size[2], 3, Math.min(...size) * 0.22), mat);
   m.position.set(...pos); if (rot) m.rotation.set(...rot); parent.add(m); return m;
 }
-const gun = new THREE.Group(); camera.add(gun);
+// an aiming frame at the player's eyes; the gun and sword are posed in it and his hands are put on them
+const eye = new THREE.Object3D(); eye.rotation.order = "YXZ"; scene.add(eye);
+const gun = new THREE.Group(); eye.add(gun);
 const slide = new THREE.Group(); gun.add(slide);
 rbox(slide, [0.029, 0.031, 0.188], [0, 0.03, 0], metal);
 for (let i = 0; i < 8; i++) rbox(slide, [0.0302, 0.022, 0.0025], [0, 0.031, 0.058 + i * 0.0055], polymer);
@@ -691,10 +697,10 @@ rbox(mag, [0.029, 0.011, 0.048], [0, -0.06, 0], polymer);
 const magHome = mag.position.clone();
 const muzzle = new THREE.Object3D(); muzzle.position.set(0, 0.03, -0.118); gun.add(muzzle);
 const port = new THREE.Object3D(); port.position.set(0.02, 0.04, -0.01); gun.add(port);
-gun.traverse(o => { if (o.isMesh) o.renderOrder = 5; });
+gun.traverse(o => { if (o.isMesh) o.castShadow = true; });
 
 // ================================================================ the sword
-const sword = new THREE.Group(); camera.add(sword); sword.visible = false;
+const sword = new THREE.Group(); eye.add(sword); sword.visible = false;
 const swordModel = new THREE.Group(); sword.add(swordModel);
 {
   const steel = new THREE.MeshPhysicalMaterial({ color: 0xd9dde2, metalness: 1, roughness: 0.2, clearcoat: 0.4, clearcoatRoughness: 0.15 });
@@ -715,7 +721,7 @@ const swordModel = new THREE.Group(); sword.add(swordModel);
   const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.0155, 0.0175, 0.165, 18), leather); grip.position.y = 0.0; swordModel.add(grip);
   for (let i = 0; i < 7; i++) { const w = new THREE.Mesh(new THREE.TorusGeometry(0.0172, 0.003, 6, 18), wrapMat); w.rotation.x = Math.PI / 2; w.rotation.y = 0.35; w.position.y = -0.068 + i * 0.022; swordModel.add(w); }
   const pommel = new THREE.Mesh(new THREE.SphereGeometry(0.027, 20, 16), guardMetal); pommel.position.y = -0.1; pommel.scale.y = 0.85; swordModel.add(pommel);
-  swordModel.traverse(o => { if (o.isMesh) { o.castShadow = false; o.renderOrder = 5; } });
+  swordModel.traverse(o => { if (o.isMesh) o.castShadow = true; });
 }
 // drop a real sword model at models/sword.glb and it's used instead (longest axis becomes the blade)
 new GLTFLoader().load("models/sword.glb", g => {
@@ -1538,6 +1544,80 @@ function cloneSkinned(src) {
   return clone;
 }
 
+// ================================================================ the player's own body
+let me = null;
+function makePlayerBody() {
+  const root = cloneSkinned(MODEL.scene); root.scale.setScalar(MODEL_SCALE);
+  const bones = {}, tint = new THREE.Color(0.13, 0.16, 0.22); // a darker, bluer kit than the dummy's
+  root.traverse(o => {
+    if (o.isMesh) {
+      o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false;
+      const mats = [].concat(o.material).map(m => { const c = m.clone(); c.color = c.color.clone().multiply(tint); return c; });
+      o.material = mats.length === 1 ? mats[0] : mats;
+    }
+    if (o.isBone) bones[o.name.replace("mixamorig", "")] = o;
+  });
+  scene.add(root);
+  const mixer = new THREE.AnimationMixer(root), acts = {};
+  for (const n of ["Idle", "Walk", "Run"]) { const c = MODEL.animations.find(a => a.name === n); if (c) { acts[n] = mixer.clipAction(c); acts[n].play(); acts[n].setEffectiveWeight(n === "Idle" ? 1 : 0); } }
+  me = { root, bones, mixer, acts };
+}
+function turnBone(bone, axis, ang) {
+  const q = new THREE.Quaternion().setFromAxisAngle(axis, ang);
+  const pq = bone.parent.getWorldQuaternion(new THREE.Quaternion()), wq = bone.getWorldQuaternion(new THREE.Quaternion());
+  bone.quaternion.copy(pq.invert().multiply(q.multiply(wq))); bone.updateMatrixWorld(true);
+}
+// put a hand on a point of the weapon, palm on it rather than the wrist, fingers pointing along "fingers"
+function handOn(side, target, fingers, pole) {
+  const b = me.bones, up = b[side + "Arm"], lo = b[side + "ForeArm"], ha = b[side + "Hand"], mid = b[side + "HandMiddle1"];
+  let t = target.clone();
+  for (let pass = 0; pass < 2; pass++) {
+    armIK(up, lo, ha, t, pole, 1);
+    if (mid) aimBone(ha, mid.getWorldPosition(V()).sub(ha.getWorldPosition(V())), fingers, 1);
+    const palm = mid ? ha.getWorldPosition(V()).lerp(mid.getWorldPosition(V()), 0.55) : ha.getWorldPosition(V());
+    t.add(target.clone().sub(palm));
+  }
+}
+function updateBody(realDt, moving) {
+  if (!me) return;
+  const { root, bones, acts } = me;
+  root.position.copy(player.pos); root.rotation.y = eye.rotation.y;
+  const fwd = V().set(-Math.sin(eye.rotation.y), 0, -Math.cos(eye.rotation.y));
+  const along = player.vel.x * fwd.x + player.vel.z * fwd.z;
+  const run = THREE.MathUtils.clamp((moving - 3.6) / 1.8, 0, 1), walk = Math.min(1, moving / 1.2) * (1 - run);
+  const sgn = along < -0.4 ? -1 : 1; // walking backwards plays the walk in reverse
+  if (acts.Idle) acts.Idle.setEffectiveWeight(1 - Math.max(walk, run));
+  if (acts.Walk) { acts.Walk.setEffectiveWeight(walk); acts.Walk.timeScale = sgn * THREE.MathUtils.clamp(moving / 1.7, 0.6, 1.8); }
+  if (acts.Run) { acts.Run.setEffectiveWeight(run); acts.Run.timeScale = sgn * THREE.MathUtils.clamp(moving / 5.5, 0.7, 1.4); }
+  me.mixer.update(realDt);
+  root.updateMatrixWorld(true);
+  // the upper body follows the aim up and down
+  const right = V().set(Math.cos(eye.rotation.y), 0, -Math.sin(eye.rotation.y));
+  for (const n of ["Spine", "Spine1", "Spine2"]) if (bones[n]) turnBone(bones[n], right, -eye.rotation.x * 0.28);
+  if (bones.Head) turnBone(bones.Head, right, -eye.rotation.x * 0.12);
+  // the weapon hangs off the aim frame at the eyes; the head is where the eyes are
+  if (bones.Head) { const h = bones.Head.getWorldPosition(V()); eye.position.set(h.x, h.y + 0.07, h.z).addScaledVector(fwd, 0.08); }
+  eye.updateMatrixWorld(true);
+  const down = V().set(0, -1, 0), l = right.clone().negate();
+  if (weapon === "pistol") {
+    gun.updateMatrixWorld(true);
+    const grip = gun.localToWorld(V().set(0, -0.045, 0.06)), supp = gun.localToWorld(V().set(-0.022, -0.06, 0.05));
+    const gripFingers = V().set(-0.75, -0.2, -0.65).applyQuaternion(gun.getWorldQuaternion(new THREE.Quaternion()));
+    const suppFingers = V().set(0.75, -0.25, -0.6).applyQuaternion(gun.getWorldQuaternion(new THREE.Quaternion()));
+    const sh = bones.RightArm.getWorldPosition(V());
+    handOn("Right", grip, gripFingers, sh.clone().addScaledVector(down, 0.6).addScaledVector(right, 0.5));
+    if (!gs.reloading || gs.rt / 1.5 > 0.8) handOn("Left", supp, suppFingers, bones.LeftArm.getWorldPosition(V()).addScaledVector(down, 0.6).addScaledVector(l, 0.4));
+    else handOn("Left", mag.getWorldPosition(V()), V().set(0, 1, 0), bones.LeftArm.getWorldPosition(V()).addScaledVector(down, 0.6).addScaledVector(l, 0.4)); // reaching for the mag
+  } else {
+    sword.updateMatrixWorld(true);
+    const q = sword.getWorldQuaternion(new THREE.Quaternion());
+    const g1 = sword.localToWorld(V().set(0, 0.045, 0)), g2 = sword.localToWorld(V().set(0, -0.05, 0)); // both hands on the long grip
+    const wrap = V().set(0, 0, -1).applyQuaternion(q), wrapL = V().set(0, 0, 1).applyQuaternion(q);
+    handOn("Right", g1, wrap, bones.RightArm.getWorldPosition(V()).addScaledVector(down, 0.6).addScaledVector(right, 0.5));
+    handOn("Left", g2, wrapL, bones.LeftArm.getWorldPosition(V()).addScaledVector(down, 0.6).addScaledVector(l, 0.3));
+  }
+}
+
 // ================================================================ player, input, shooting
 const player = { pos: new THREE.Vector3(0, 0, 0), vel: V(), yaw: 0, pitch: -0.05, recoil: 0, recoilYaw: 0, onGround: true };
 const keys = {};
@@ -1593,7 +1673,7 @@ function reload() {
   if (gs.reloading || ammo === 12) return;
   gs.reloading = true; gs.rt = 0; gs.stage = 0;
 }
-const raycaster = new THREE.Raycaster();
+const raycaster = new THREE.Raycaster(), camRay = new THREE.Raycaster();
 function shoot() {
   if (gs.cd > 0 || gs.reloading) return;
   if (ammo <= 0) { Sound.click(0.35, 3200); gs.cd = 0.25; reload(); return; }
@@ -1603,7 +1683,7 @@ function shoot() {
   muzzle.getWorldPosition(flash.position);
   flash.scale.setScalar(rand(0.12, 0.18)); flash.material.rotation = rand(0, 6.28); flash.visible = true; flash.userData.t = 0.04;
   flashLight.position.copy(flash.position); flashLight.intensity = 5;
-  muzzleSmoke(flash.position, V().set(0, 0, -1).applyQuaternion(camera.quaternion));
+  muzzleSmoke(flash.position, V().set(0, 0, -1).applyQuaternion(eye.quaternion));
   ejectShell();
   Sound.shot();
   const spread = aiming ? 0.0015 : 0.006;
@@ -1719,7 +1799,7 @@ function updateSword(realDt, dt, moving, sprint) {
           const probe = s.probe(p);
           if (!probe || probe.d > 0.035 || sw.hitParts.has(s.id + probe.name)) continue;
           sw.hitParts.add(s.id + probe.name);
-          const dir = sw.kind === "stab" ? V().set(0, 0, -1).applyQuaternion(camera.quaternion) : vel.clone().normalize();
+          const dir = sw.kind === "stab" ? V().set(0, 0, -1).applyQuaternion(eye.quaternion) : vel.clone().normalize();
           s.bladeHit(p, dir, sw.kind, probe.name, Math.min(1.6, vel.length() / 6));
           hitEl.style.opacity = 1; hitT = 0.12;
         }
@@ -1761,9 +1841,26 @@ function update(realDt) {
   const moving = Math.hypot(player.vel.x, player.vel.z);
   if (player.onGround && moving > 0.6) { gs.step -= realDt * moving; if (gs.step <= 0) { gs.step = 1.75; Sound.step(sprint ? 0.16 : 0.1); } }
   player.recoil *= Math.exp(-realDt * 8); player.recoilYaw *= Math.exp(-realDt * 8);
-  camera.position.set(player.pos.x, player.pos.y + 1.64 + Math.abs(Math.sin(gs.bob)) * 0.012 * Math.min(1, moving / 4) * (1 - gs.ads), player.pos.z);
-  camera.rotation.set(player.pitch + player.recoil, player.yaw + player.recoilYaw, 0);
-  camera.fov += ((aiming ? 50 : 70) - camera.fov) * (1 - Math.exp(-realDt * 14)); camera.updateProjectionMatrix();
+  {
+    camera.rotation.set(player.pitch + player.recoil, player.yaw + player.recoilYaw, 0);
+    const fwd = V().set(0, 0, -1).applyQuaternion(camera.quaternion), right = V().set(1, 0, 0).applyQuaternion(camera.quaternion);
+    const pivot = V().set(player.pos.x, player.pos.y + 1.6, player.pos.z);
+    const shoulder = pivot.clone().addScaledVector(right, THREE.MathUtils.lerp(0.75, 0.55, gs.ads)).add(V().set(0, 0.12, 0));
+    const dist = THREE.MathUtils.lerp(2.7, 1.3, gs.ads);
+    let want = shoulder.clone().addScaledVector(fwd, -dist);
+    const back = want.clone().sub(pivot), bl = back.length();
+    camRay.set(pivot, back.divideScalar(bl)); camRay.far = bl + 0.2;
+    const blk = camRay.intersectObjects(props.map(p => p.mesh), false)[0];
+    if (blk) want = pivot.clone().addScaledVector(back, Math.max(0.3, blk.distance - 0.2));
+    camera.position.copy(want);
+    // aim point: what's under the crosshair, roughly; the eye frame (and so the gun) turns toward it
+    camera.updateMatrixWorld();
+    eye.position.set(player.pos.x, player.pos.y + 1.6, player.pos.z);
+    const aimAt = camera.position.clone().addScaledVector(fwd, 30);
+    const ad = aimAt.sub(eye.position);
+    eye.rotation.set(Math.atan2(ad.y, Math.hypot(ad.x, ad.z)), Math.atan2(-ad.x, -ad.z), 0);
+  }
+  camera.fov += ((aiming ? 48 : 65) - camera.fov) * (1 - Math.exp(-realDt * 14)); camera.updateProjectionMatrix();
   // sun shadows follow the player
   sunLight.target.position.set(player.pos.x, 0, player.pos.z - 4);
   sunLight.position.copy(sunLight.target.position).addScaledVector(sun, 40);
@@ -1776,7 +1873,7 @@ function update(realDt) {
   gs.bob += realDt * moving * 1.7;
   gs.kickV += (-gs.kick * 400 - gs.kickV * 25) * realDt; gs.kick += gs.kickV * realDt;
   gs.slide = Math.max(0, gs.slide - realDt * 14);
-  const base = new THREE.Vector3(0.16, -0.145, -0.34).lerp(new THREE.Vector3(0, -0.0805, -0.28), gs.ads);
+  const base = new THREE.Vector3(0.1, -0.2, -0.44).lerp(new THREE.Vector3(0.03, -0.1, -0.5), gs.ads);
   const bob = (1 - gs.ads * 0.85) * Math.min(1, moving / 4);
   const gp = base.clone();
   gp.x += Math.cos(gs.bob) * 0.011 * bob + gs.swayX * (1 - gs.ads * 0.7);
@@ -1796,7 +1893,8 @@ function update(realDt) {
   slide.position.z = gs.slide * 0.034;
   gun.position.copy(gp); gun.rotation.set(rx, gs.swayX * 2, rz);
   if (weapon === "sword") updateSword(realDt, dt, moving, sprint);
-  document.getElementById("dot").style.opacity = 1 - gs.ads;
+  document.getElementById("dot").style.opacity = 1;
+  updateBody(realDt, moving);
   if (flash.visible) { flash.userData.t -= realDt; muzzle.getWorldPosition(flash.position); if (flash.userData.t <= 0) flash.visible = false; }
   flashLight.intensity *= Math.exp(-realDt * 45);
   if (hitT > 0) { hitT -= realDt; if (hitT <= 0) hitEl.style.opacity = 0; }
@@ -1890,13 +1988,14 @@ new GLTFLoader().load("models/Soldier.glb", g => {
   const span = head.getWorldPosition(V()).y - foot.getWorldPosition(V()).y;
   MODEL_SCALE = span > 0.01 ? 1.8 * 0.85 / span : 1;
   new Soldier(0, -6.4, Math.PI); // in front of the wall
+  makePlayerBody();
   document.getElementById("startText").textContent = "Click to start";
   setTimeout(() => (document.getElementById("help").style.opacity = 0), 9000);
 }, undefined, e => { document.getElementById("startText").textContent = location.protocol === "file:" ? "Run start.bat to open this through localhost" : "Couldn't load the soldier model"; });
 loop();
 
 // testing hooks
-window.__game = { scene, renderer, sw, sword, setWeapon: w => setWeapon(w), swordAttack: k => swordAttack(k), player, soldiers, camera, shoot: () => { gs.cd = 0; shoot(); }, update, render, spawnTarget };
+window.__game = { me: () => me, eye, scene, renderer, sw, sword, setWeapon: w => setWeapon(w), swordAttack: k => swordAttack(k), player, soldiers, camera, shoot: () => { gs.cd = 0; shoot(); }, update, render, spawnTarget };
 </script>
 </body>
 </html>
