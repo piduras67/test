@@ -1536,10 +1536,12 @@ class Soldier {
   reach(side, target, k, anchor) {
     const fore = this.parts["lArm" + side]; if (!fore || (this.joints["lArm" + side] && this.joints["lArm" + side].severed) || (this.joints["uArm" + side] && this.joints["uArm" + side].severed)) return null;
     const tip = toV(fore.body.position).add(fore.axis.clone().applyQuaternion(toQ(fore.body.quaternion)).multiplyScalar(fore.len * 0.9));
+    k = Math.max(0, k || 0); if (k === 0) return tip;
     const pull = target.clone().sub(tip); if (pull.length() > 0.6) pull.setLength(0.6);
     const damp = 2.2 * Math.sqrt(k * fore.body.mass);
     const f = pull.multiplyScalar(k).sub(toV(fore.body.velocity).multiplyScalar(damp));
     const rel = tip.clone().sub(toV(fore.body.position));
+    if (!isFinite(f.x + f.y + f.z)) return tip; // never feed the physics a bad number
     fore.body.applyForce(new CANNON.Vec3(f.x, f.y, f.z), new CANNON.Vec3(rel.x, rel.y, rel.z));
     if (anchor) { const c = this.parts.chest.body; c.applyForce(new CANNON.Vec3(-f.x * 0.4, -f.y * 0.4, -f.z * 0.4)); }
     return tip;
