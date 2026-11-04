@@ -50,6 +50,7 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { FXAAShader } from "three/addons/shaders/FXAAShader.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -58,14 +59,14 @@ const BLOOD = true;
 const V = () => new THREE.Vector3();
 
 // ================================================================ renderer, sky, light
-const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+const renderer = new THREE.WebGLRenderer({ antialias: false, stencil: false, powerPreference: "high-performance" });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 1.25));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 0.62;
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap; renderer.shadowMap.autoUpdate = false; // redrawn every other frame (see render)
 document.body.prepend(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -98,8 +99,8 @@ scene.fog = new THREE.FogExp2(0xcfc6b8, 0.0028); // a little haze for depth
 const sunLight = new THREE.DirectionalLight(0xffe2bf, 3.6);
 sunLight.position.copy(sun).multiplyScalar(40);
 sunLight.castShadow = true;
-sunLight.shadow.mapSize.set(2048, 2048);
-Object.assign(sunLight.shadow.camera, { left: -22, right: 22, top: 22, bottom: -22, near: 1, far: 140 });
+sunLight.shadow.mapSize.set(1024, 1024);
+Object.assign(sunLight.shadow.camera, { left: -13, right: 13, top: 13, bottom: -13, near: 1, far: 100 });
 sunLight.shadow.bias = -0.00025;
 sunLight.shadow.normalBias = 0.025;
 sunLight.shadow.radius = 4;
@@ -219,9 +220,9 @@ scene.add(plate);
 }
 
 // ================================================================ post-processing
-const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth * renderer.getPixelRatio(), innerHeight * renderer.getPixelRatio(), { type: THREE.HalfFloatType, samples: 2 }));
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth * renderer.getPixelRatio(), innerHeight * renderer.getPixelRatio(), { type: THREE.HalfFloatType, samples: 0 }));
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.18, 0.55, 0.9);
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.18, 0.55, 0.9);
 composer.addPass(bloom);
 composer.addPass(new ShaderPass({
   uniforms: { tDiffuse: { value: null }, uTime: { value: 0 } },
@@ -243,11 +244,12 @@ composer.addPass(new ShaderPass({
       c += (h(vUv * 800.0) - 0.5) * 0.012;
       gl_FragColor = vec4(c, 1.0); }`,
 }));
+const fxaa = new ShaderPass(FXAAShader); composer.addPass(fxaa); // cheap edge smoothing, since MSAA is off
 composer.addPass(new OutputPass());
 
 addEventListener("resize", () => {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight); composer.setSize(innerWidth, innerHeight);
+  renderer.setSize(innerWidth, innerHeight); composer.setSize(innerWidth, innerHeight); setFxaa();
 });
 
 // ================================================================ sound (synthesised, no files)
@@ -394,7 +396,7 @@ props[4].mesh.position.y += 1; props[4].body.position.y += 1; props[4].mesh.upda
 // pixel-style blood: every drop is a little cube in one of a few flat reds, no gloss, no smoothing
 const PIXEL_REDS = ["#3d0404", "#5e0707", "#86100c", "#a8170f"];
 const PIXEL_COLORS = PIXEL_REDS.map(c => new THREE.Color(c));
-const bloodMat = new THREE.MeshPhysicalMaterial({ color: 0xffffff, emissive: 0x1a0000, roughness: 0.18, metalness: 0, clearcoat: 0.6, clearcoatRoughness: 0.1, envMapIntensity: 0.18 });
+const bloodMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x1a0000, roughness: 0.2, metalness: 0, envMapIntensity: 0.25 });
 const LIQUID_COLORS = ["#5a0a0a", "#6e0b0b", "#640909", "#4f0707"].map(c => new THREE.Color(c));
 const MAX_DROPS = 14000;
 const dropMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 2), bloodMat, MAX_DROPS);
@@ -449,7 +451,7 @@ function splatTexture() {
   const t = new THREE.CanvasTexture(out); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
   return t;
 }
-const wetDecal = map => new THREE.MeshPhysicalMaterial({ map, emissive: 0x1c0000, color: 0xc8c8c8, roughness: 0.22, clearcoat: 0.5, clearcoatRoughness: 0.12, envMapIntensity: 0.15, transparent: true, alphaTest: 0.08, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
+const wetDecal = map => new THREE.MeshStandardMaterial({ map, emissive: 0x1c0000, color: 0xc8c8c8, roughness: 0.25, envMapIntensity: 0.15, transparent: true, alphaTest: 0.08, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
 const splatMats = [0, 1, 2, 3, 4, 5, 6, 7].map(() => wetDecal(splatTexture()));
 const DECALS_PER = 2500; // per texture: 20,000 splats in all before the oldest start to go
 const decalSets = splatMats.map(mat => {
@@ -535,7 +537,7 @@ function poolGeometry(seed) {
 }
 // pools are a single liquid surface per area: every source adds to a smooth field, and the field is cut at a
 // threshold, so neighbouring pools flow into each other instead of stacking as separate circles
-const FIELD_SIZE = 7, FIELD_RES = 256, SHOW_RES = 640; // the field is drawn coarse, then cut at a fine resolution so the edge is smooth
+const FIELD_SIZE = 7, FIELD_RES = 160, SHOW_RES = 320; // the field is drawn coarse, then cut at a fine resolution so the edge is smooth
 const fields = [];
 function makeField(x, z) {
   const draw = document.createElement("canvas"); draw.width = draw.height = FIELD_RES;
@@ -603,7 +605,7 @@ function updateFields(dt) {
     f.tick -= dt;
     if (!moving && !f.dirty) continue;
     if (f.tick > 0) continue;
-    f.tick = 0.1; f.dirty = false;
+    f.tick = 0.22; f.dirty = false;
     const g = f.dctx, N = FIELD_RES, ppm = N / FIELD_SIZE;
     g.clearRect(0, 0, N, N);
     g.globalCompositeOperation = "lighter";
@@ -826,7 +828,7 @@ function spawnClumps(list, dir, centre, speed = 1) {
     for (const v of g) {
       rad = Math.max(rad, v.w.distanceTo(cen));
       const geo = VOX_UNIT.clone(); const n = geo.attributes.position.count, colA = new Float32Array(n * 3);
-      const cc = BLOOD ? v.c.clone().lerp(new THREE.Color(0x5e0808), rand(0.25, 0.6)) : v.c;
+      const cc = BLOOD ? v.c.clone().lerp(new THREE.Color(0x470606), rand(0.3, 0.7)) : v.c;
       for (let i = 0; i < n; i++) { colA[i * 3] = cc.r; colA[i * 3 + 1] = cc.g; colA[i * 3 + 2] = cc.b; }
       geo.setAttribute("color", new THREE.BufferAttribute(colA, 3));
       m4.compose(v.w.clone().sub(cen), v.q, one.setScalar(STEP)); geo.applyMatrix4(m4); geos.push(geo);
@@ -1074,10 +1076,11 @@ function ejectShell() {
 // he is built from small solid blocks: a coloured shell with a pale foam core. a shot knocks the blocks it hits right out of him;
 // they fly off together as real chunks and what's left is a hole you can see into.
 const STEP = 0.032;
-const VOX_UNIT = new RoundedBoxGeometry(1, 1, 1, 1, 0.14);
+const VOX_UNIT = new THREE.BoxGeometry(1, 1, 1); // plain cubes: 12 triangles each, so thousands stay cheap
 const voxMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.58, metalness: 0.02 });
 const clumpMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.58, metalness: 0.02 });
-const CUT = new THREE.Color(BLOOD ? 0x860f0c : 0xe9e2d2); // raw red where a block was torn out (pale core if blood is off)
+const CUT = new THREE.Color(BLOOD ? 0x6c0d0b : 0xe9e2d2); // raw red where a block was torn out (pale core if blood is off)
+const _ct = new THREE.Vector3();
 const N6 = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 const vkey = (i, j, k) => ((i + 512) * 1024 + (j + 512)) * 1024 + (k + 512);
 let VOX = null;
@@ -1086,7 +1089,7 @@ function buildVoxTemplate() {
   const B = {}; root.traverse(o => { if (o.isBone) B[o.name.replace("mixamorig", "")] = o; });
   const P = n => B[n].getWorldPosition(V());
   const C = h => new THREE.Color(h);
-  const SKIN = C(0xd7a27c), SHIRT = C(0x46607f), PANTS = C(0x2c3039), SHOE = C(0x3b2a21), BELT = C(0x16171a), HAIR = C(0x2b2420), EYE = C(0x0d0f12);
+  const SKIN = C(0xdcc7ab), SHIRT = C(0xcbb191), PANTS = C(0xc2a88a), SHOE = C(0xa89070), BELT = C(0xb9a082), HAIR = C(0xdcc7ab), EYE = C(0x15171a); // one family of tan mannequin tones, a slightly different shade per body part
   const clamp = THREE.MathUtils.clamp, t = V();
   const bounds = (pts, pad) => ({ min: V().set(Math.min(...pts.map(p => p.x)) - pad, Math.min(...pts.map(p => p.y)) - pad, Math.min(...pts.map(p => p.z)) - pad), max: V().set(Math.max(...pts.map(p => p.x)) + pad, Math.max(...pts.map(p => p.y)) + pad, Math.max(...pts.map(p => p.z)) + pad) });
   const capsule = (a, b, r0, r1, color, flat = false, also = null) => { const ab = b.clone().sub(a), L2 = ab.lengthSq(); return { color, ...bounds([a, b], Math.max(r0, r1) + STEP), test: w => { let u = t.copy(w).sub(a).dot(ab) / L2; if (flat && (u < 0 || u > 1)) return false; u = clamp(u, 0, 1); const r = r0 + (r1 - r0) * u; t.copy(w).sub(a).addScaledVector(ab, -u); return t.lengthSq() < r * r && (!also || also(w, u)); } }; };
@@ -1097,7 +1100,7 @@ function buildVoxTemplate() {
   const shoulderHalf = Math.abs(P("LeftArm").x - P("RightArm").x) / 2, hipHalf = Math.abs(P("LeftUpLeg").x - P("RightUpLeg").x) / 2;
   const mid = s1.clone().add(s2).multiplyScalar(0.5);
   const prims = {};
-  prims.Hips = [prism(hipsP.clone().add(V().set(0, -0.09, 0)), spineP, hipHalf + 0.075, hipHalf + 0.035, 0.115, 0.105, PANTS), prism(hipsP.clone().add(V().set(0, -0.09, 0)), spineP, hipHalf + 0.075, hipHalf + 0.035, 0.115, 0.105, BELT, w => w.y > spineP.y - 0.04)];
+  prims.Hips = [prism(hipsP.clone().add(V().set(0, -0.09, 0)), spineP, hipHalf + 0.075, hipHalf + 0.035, 0.115, 0.105, BELT), prism(hipsP.clone().add(V().set(0, -0.09, 0)), spineP, hipHalf + 0.075, hipHalf + 0.035, 0.115, 0.105, BELT, w => w.y > spineP.y - 0.04)];
   prims.Spine = [prism(spineP, mid, hipHalf + 0.035, shoulderHalf * 0.92, 0.105, 0.118, SHIRT)];
   prims.Spine2 = [prism(mid, neckP.clone().add(V().set(0, -0.02, 0)), shoulderHalf * 0.92, shoulderHalf + 0.02, 0.118, 0.105, SHIRT)];
   prims.Neck = [capsule(neckP.clone().add(V().set(0, -0.03, 0)), headP.clone().add(V().set(0, 0.02, 0)), 0.048, 0.046, SKIN, true)];
@@ -1107,7 +1110,7 @@ function buildVoxTemplate() {
     ellipsoid(P("LeftEye").add(V().set(0, 0.0, 0.004)), 0.016, 0.016, 0.02, EYE), ellipsoid(P("RightEye").add(V().set(0, 0.0, 0.004)), 0.016, 0.016, 0.02, EYE)];
   for (const sd of ["Left", "Right"]) {
     prims[sd + "Arm"] = [capsule(P(sd + "Arm"), P(sd + "ForeArm"), 0.054, 0.046, SHIRT), ellipsoid(P(sd + "Arm"), 0.066, 0.066, 0.066, SHIRT)];
-    prims[sd + "ForeArm"] = [capsule(P(sd + "ForeArm"), P(sd + "Hand"), 0.046, 0.036, SKIN), capsule(P(sd + "Hand"), P(sd + "HandMiddle4"), 0.034, 0.026, SKIN), capsule(P(sd + "ForeArm"), P(sd + "ForeArm").lerp(P(sd + "Hand"), 0.3), 0.05, 0.049, SHIRT)];
+    prims[sd + "ForeArm"] = [capsule(P(sd + "ForeArm"), P(sd + "Hand"), 0.046, 0.036, SKIN), capsule(P(sd + "Hand"), P(sd + "HandMiddle4"), 0.048, 0.042, SKIN), capsule(P(sd + "ForeArm"), P(sd + "ForeArm").lerp(P(sd + "Hand"), 0.3), 0.05, 0.049, SKIN)];
     prims[sd + "UpLeg"] = [capsule(P(sd + "UpLeg"), P(sd + "Leg"), 0.09, 0.067, PANTS)];
     const ank = P(sd + "Foot"), toe = P(sd + "Toe_End");
     prims[sd + "Leg"] = [capsule(P(sd + "Leg"), ank, 0.067, 0.051, PANTS), box(V().set(ank.x - 0.052, 0.0, ank.z - 0.065), V().set(ank.x + 0.052, ank.y + 0.04, toe.z + 0.01), SHOE)];
@@ -1481,7 +1484,7 @@ class Soldier {
   // blood soaks into the blocks around a wound, darkest at the edge of the hole
   stain(centre, r) {
     if (!BLOOD) return;
-    const w = V(), red = new THREE.Color(0x5e0808);
+    const w = V(), red = new THREE.Color(0x470606);
     for (const bn in this.vox) {
       const m = this.vox[bn], vox = m.userData.vox; let ch = false;
       for (let i = 0; i < vox.length; i++) { w.copy(vox[i].p).applyMatrix4(m.matrixWorld); const d = w.distanceTo(centre); if (d < r) { vox[i].c = vox[i].c.clone().lerp(red, (1 - d / r) * rand(0.55, 1) * 0.85); m.setColorAt(i, vox[i].c); ch = true; } }
@@ -1503,12 +1506,14 @@ class Soldier {
     const c = point.clone().addScaledVector(dir, R * rand(0.15, 0.7)).add(V().set(rand(-1, 1), rand(-1, 1), rand(-1, 1)).multiplyScalar(R * 0.25));
     const lobes = [{ c, r2: R * R }];
     for (let i = 0, n = 2 + ((Math.random() * 3) | 0); i < n; i++) { const r = R * rand(0.4, 0.75); lobes.push({ c: c.clone().add(V().set(rand(-1, 1), rand(-1, 1), rand(-1, 1)).normalize().multiplyScalar(R * rand(0.5, 1.0))).addScaledVector(dir, R * rand(-0.2, 0.9)), r2: r * r }); }
-    const test = w => { for (const l of lobes) if (w.distanceToSquared(l.c) < l.r2 * rand(0.7, 1.15)) return true; return false; };
+    const maxDepth = 0.035 + R * 0.55, ref = point.clone(); // a shallow bowl, never all the way through
+    const test = w => { if (_ct.copy(w).sub(ref).dot(dir) > maxDepth) return false; for (const l of lobes) if (w.distanceToSquared(l.c) < l.r2 * rand(0.7, 1.15)) return true; return false; };
     const n = this.carve(test, dir, c, 1);
     if (n) {
       Sound.crunch(point, Math.min(1, n / 25)); redMist(point, dir, Math.min(1.5, n / 30));
       if (BLOOD) {
         this.stain(c, R * 2.2);
+        { const part = this.parts[this.nearestPart(point)]; if (part) for (let i = 0; i < 3; i++) decalOn(part.group, splatMats[(Math.random() * splatMats.length) | 0], point.clone().add(V().set(rand(-1, 1), rand(-1, 1), rand(-1, 1)).multiplyScalar(R * 0.8)), normal, R * rand(2.6, 4.5), R * rand(2.2, 3.8)); } // wet smears on the body round the hole
         spray(c, dir.clone().negate().lerp(normal, 0.4).normalize(), Math.round(30 + n), 2.6, 0.7, 0.004, 0.012); spray(c, dir, Math.round(20 + n * 0.6), 4.5, 0.5);
         pixelGibs(c, dir, Math.min(14, 3 + (n / 8) | 0));
         this.bleedAt(c, normal, 24 + n * 0.3, 14);
@@ -1518,6 +1523,7 @@ class Soldier {
   }
   // the round carries on through him: a narrow tunnel to the far side, and a bigger lump torn out where it leaves
   exitWound(point, dir, scale = 1) {
+    return; // rounds stay in him: no hole straight through
     if (!this.vox) return;
     const rc = new THREE.Raycaster(point.clone().addScaledVector(dir, 0.02), dir.clone(), 0, 0.75);
     const hits = rc.intersectObjects(Object.values(this.vox), false);
@@ -2769,7 +2775,6 @@ function fireRay(perSoldier) {
   // a lump comes out where it went in, and a bigger one where it leaves
   const sc = W.pellets > 1 ? 0.7 : W === GUNS.rifle ? 1.15 : 1;
   s.chunkOut(hit.point, n, dir, sc);
-  s.exitWound(hit.point, dir, sc);
   // the bullet carries on out the back and spatters whatever is behind him
   raycaster.set(hit.point.clone().addScaledVector(dir, 0.4), dir); raycaster.far = 6;
   const behind = raycaster.intersectObjects(propMeshes, false)[0];
@@ -3041,17 +3046,28 @@ function update(realDt) {
   Sound.listener(camera);
 }
 
+function setFxaa() { const pr = renderer.getPixelRatio(); fxaa.material.uniforms["resolution"].value.set(1 / (innerWidth * pr), 1 / (innerHeight * pr)); }
+setFxaa();
+// the picture gets sharper or softer on its own to hold the frame rate
+const MAX_PR = Math.min(devicePixelRatio, 1.25); let curPR = MAX_PR, frameEMA = 16, prCool = 3000, shadowTick = 0;
+function adaptResolution(ms) {
+  frameEMA += (ms - frameEMA) * 0.06; prCool -= ms; if (prCool > 0) return;
+  let v = curPR; if (frameEMA > 24 && curPR > 0.55) v = Math.max(0.55, curPR - 0.15); else if (frameEMA < 13 && curPR < MAX_PR) v = Math.min(MAX_PR, curPR + 0.1);
+  if (v !== curPR) { curPR = v; renderer.setPixelRatio(v); renderer.setSize(innerWidth, innerHeight); composer.setPixelRatio(v); composer.setSize(innerWidth, innerHeight); setFxaa(); frameEMA = 16; prCool = 2500; }
+}
 function render() {
+  if ((shadowTick++ & 1) === 0) renderer.shadowMap.needsUpdate = true;
   for (const s of soldiers) s.pose();
   scene.updateMatrixWorld();
-  composer.passes[composer.passes.length - 2].uniforms && (composer.passes[composer.passes.length - 2].uniforms.uTime.value = performance.now() * 0.001);
+  { const gp = composer.passes[composer.passes.length - 3]; if (gp && gp.uniforms && gp.uniforms.uTime) gp.uniforms.uTime.value = performance.now() * 0.001; }
   composer.render();
 }
 
 const clock = new THREE.Clock();
 function loop() {
   requestAnimationFrame(loop);
-  update(Math.min(clock.getDelta(), 0.05));
+  const d = clock.getDelta(); adaptResolution(d * 1000);
+  update(Math.min(d, 0.05));
   render();
 }
 
