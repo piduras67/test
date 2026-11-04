@@ -780,6 +780,7 @@ function updateSparks(dt) {
 }
 const sparkLight = new THREE.PointLight(0xffc070, 0, 3); scene.add(sparkLight);
 function decalOn(parent, mat, point, normal, sx, sy, spin = rand(0, 6.28)) {
+  return new THREE.Object3D(); // no decals stuck to bodies: the blocks themselves show the blood
   if (!BLOOD && mat !== dentMat) return new THREE.Object3D();
   const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
   m.position.copy(point).addScaledVector(normal, 0.006);
