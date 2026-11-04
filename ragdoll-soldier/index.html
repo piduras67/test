@@ -34,7 +34,7 @@
 <div id="hud">
   <div id="dot"></div>
   <div id="hit"></div>
-  <div id="help">1 pistol &nbsp;·&nbsp; 2 rifle &nbsp;·&nbsp; 3 shotgun &nbsp;·&nbsp; 4 sword &nbsp;·&nbsp; 5 gravity gun (RMB grab, LMB launch, R spin, wheel distance) &nbsp;·&nbsp; LMB fire / slash &nbsp;·&nbsp; RMB aim / stab &nbsp;·&nbsp; shoot the red barrels (they blow chunks off him) &nbsp;·&nbsp; R reload &nbsp;·&nbsp; E new target &nbsp;·&nbsp; Q slow motion</div>
+  <div id="help">1 pistol &nbsp;·&nbsp; 2 rifle &nbsp;·&nbsp; 3 shotgun &nbsp;·&nbsp; 4 sword &nbsp;·&nbsp; 5 gravity gun (RMB grab, LMB launch, R spin, F rip the held limb off, wheel distance) &nbsp;·&nbsp; LMB fire / slash &nbsp;·&nbsp; RMB aim / stab &nbsp;·&nbsp; shoot the red barrels (they blow chunks off him) &nbsp;·&nbsp; R reload &nbsp;·&nbsp; E new target &nbsp;·&nbsp; Q slow motion</div>
   <div id="ammo"><b id="mag">12</b> / <span id="magSize">12</span></div>
 </div>
 <div id="start"><div><div class="t" id="startText">Loading…</div><div class="s">WASD to move</div></div></div>
@@ -397,7 +397,7 @@ props[4].mesh.position.y += 1; props[4].body.position.y += 1; props[4].mesh.upda
 const PIXEL_REDS = ["#3d0404", "#5e0707", "#86100c", "#a8170f"];
 const PIXEL_COLORS = PIXEL_REDS.map(c => new THREE.Color(c));
 const bloodMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x1a0000, roughness: 0.2, metalness: 0, envMapIntensity: 0.25 });
-const LIQUID_COLORS = ["#5a0a0a", "#6e0b0b", "#640909", "#4f0707"].map(c => new THREE.Color(c));
+const LIQUID_COLORS = ["#5a0a0a", "#6e0b0b", "#640909", "#2c0706"].map(c => new THREE.Color(c));
 const MAX_DROPS = 14000;
 const dropMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 2), bloodMat, MAX_DROPS);
 for (let i = 0; i < MAX_DROPS; i++) dropMesh.setColorAt(i, LIQUID_COLORS[i % LIQUID_COLORS.length]);
@@ -409,8 +409,9 @@ let dropCursor = 0;
 const ZERO = new THREE.Matrix4().makeScale(0, 0, 0), tmpV = new THREE.Vector3();
 const UPV = new THREE.Vector3(0, 1, 0);
 for (let i = 0; i < MAX_DROPS; i++) dropMesh.setMatrixAt(i, ZERO);
-function drop(pos, vel, r) {
+function drop(pos, vel, r, clot = 0) {
   if (!BLOOD) return;
+  if (clot > 0.55) for (let t = 0; t < 3 && dropCursor % 4 !== 3; t++) dropCursor = (dropCursor + 1) % MAX_DROPS; // clotting blood is the dark, thick kind
   const k = dropCursor;
   const d = drops[dropCursor]; dropCursor = (dropCursor + 1) % MAX_DROPS;
 
@@ -446,12 +447,12 @@ function splatTexture() {
   o.filter = "blur(1.2px)"; o.drawImage(c, 0, 0); o.filter = "none";
   const im = o.getImageData(0, 0, N, N), a = im.data;
   for (let i = 0; i < a.length; i += 4) { const x = (i / 4) % N, y = (i / 4 / N) | 0, d = Math.hypot(x - cx, y - cy) / R, al = a[i];
-    const dark = Math.max(0, 1 - d) * 0.5; a[i] = 135 - dark * 60; a[i + 1] = 12 - dark * 5; a[i + 2] = 10 - dark * 4; a[i + 3] = Math.min(255, al * 1.05); }
+    const dark = Math.max(0, 1 - d) * 0.5; a[i] = 168 - dark * 62; a[i + 1] = 16 - dark * 6; a[i + 2] = 13 - dark * 5; a[i + 3] = Math.min(255, al * 1.05); }
   o.putImageData(im, 0, 0);
   const t = new THREE.CanvasTexture(out); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
   return t;
 }
-const wetDecal = map => new THREE.MeshStandardMaterial({ map, emissive: 0x1c0000, color: 0xc8c8c8, roughness: 0.25, envMapIntensity: 0.15, transparent: true, alphaTest: 0.08, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
+const wetDecal = map => new THREE.MeshStandardMaterial({ map, emissive: 0x2c0404, color: 0xe4e4e4, roughness: 0.25, envMapIntensity: 0.15, transparent: true, alphaTest: 0.08, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
 const splatMats = [0, 1, 2, 3, 4, 5, 6, 7].map(() => wetDecal(splatTexture()));
 const DECALS_PER = 2500; // per texture: 20,000 splats in all before the oldest start to go
 const decalSets = splatMats.map(mat => {
@@ -496,13 +497,13 @@ function surfaceSplat(point, normal, size, vel) {
     }
   }
   addDecal(point.clone().addScaledVector(normal, 0.004 + (decalN % 40) * 0.00004), normal, spin, sx, sy);
-  if (Math.abs(normal.y) < 0.3 && size > 0.06 && Math.random() < 0.7) {
+  if (Math.abs(normal.y) < 0.3 && size > 0.04 && Math.random() < 0.95) {
     const geo = new THREE.PlaneGeometry(size * 0.3, 1); geo.translate(0, -0.5, 0);
     const r = new THREE.Mesh(geo, runMat);
     r.position.copy(point).addScaledVector(normal, 0.005);
     r.lookAt(r.position.clone().add(normal));
     r.scale.y = 0.001;
-    r.userData = { len: Math.min(point.y - 0.02, rand(0.15, 0.7) * (size * 6)), speed: rand(0.03, 0.08) };
+    r.userData = { len: Math.min(point.y - 0.02, rand(0.25, 1.1) * (size * 6)), speed: rand(0.03, 0.08) }; // long enough that neighbouring runs overlap into streaks
     scene.add(r); runs.push(r);
     if (runs.length > 600) scene.remove(runs.shift());
   }
@@ -598,8 +599,9 @@ function updateFields(dt) {
       if (s.vol < s.target) { s.vol = Math.min(s.target, s.vol + dt * 0.06); moving = true; }
       // a very slight flow in one direction, like a floor that isn't perfectly level
       // blood runs slowly downhill (no floor is perfectly level) until a wall or crate stops it
-      const nx = s.x + f.flow.x * dt * 0.03 * Math.min(1, s.vol), nz = s.z + f.flow.y * dt * 0.03 * Math.min(1, s.vol);
-      if (!inProp(nx, nz, 0.12)) { s.x = nx; s.z = nz; if (s.vol > 0.05) moving = true; }
+      const nx = s.x + f.flow.x * dt * 0.07 * Math.min(1, s.vol), nz = s.z + f.flow.y * dt * 0.07 * Math.min(1, s.vol);
+      if (!inProp(nx, nz, 0.12)) { s.x = nx; s.z = nz; if (s.vol > 0.05) moving = true;
+        s.fl = (s.fl || 0) - dt; if (s.fl <= 0 && s.vol > 0.25 && s.lobes.length < 14) { s.fl = rand(1.2, 2.2); s.lobes.push([Math.atan2(f.flow.y, f.flow.x) + rand(-0.3, 0.3), rand(0.9, 1.25), rand(0.4, 0.6)]); f.dirty = true; } } // it stretches out the way it's running
       else if (!s.blocked) { s.blocked = true; const side = Math.atan2(f.flow.y, f.flow.x) + Math.PI / 2; s.lobes.push([side, 0.9, 0.6], [side + Math.PI, 0.9, 0.6], [side, 1.4, 0.45], [side + Math.PI, 1.4, 0.45]); f.dirty = true; }
     }
     f.tick -= dt;
@@ -893,6 +895,16 @@ function redMist(pos, dir, amount = 1) { // a pale puff of dust where something 
     scene.add(s); puffs.push(s);
   }
 }
+// a fine red haze that hangs in the air where a big hit landed, drifts and slowly settles
+function bloodHaze(pos, amount = 1) {
+  if (!BLOOD) return;
+  for (let i = 0, n = Math.round(5 * amount); i < n; i++) {
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTex, color: new THREE.Color(0x6a0f0f).multiplyScalar(rand(0.85, 1.15)), transparent: true, depthWrite: false, opacity: 0, rotation: rand(0, 6.28) }));
+    s.position.copy(pos).add(V().set(rand(-0.12, 0.12), rand(-0.1, 0.15), rand(-0.12, 0.12)));
+    s.userData = { t: 0, life: rand(2.6, 4.6), v: V().set(rand(-0.25, 0.25), rand(0.0, 0.18), rand(-0.25, 0.25)), size: rand(0.22, 0.42), spin: rand(-0.3, 0.3), grow: 0.5, haze: true, sink: 0.1 };
+    scene.add(s); puffs.push(s);
+  }
+}
 const muzzleSmoke = (pos, dir) => {
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTex, color: 0xd8d8d8, transparent: true, depthWrite: false, opacity: 0 }));
   s.position.copy(pos);
@@ -1079,7 +1091,8 @@ const STEP = 0.032;
 const VOX_UNIT = new THREE.BoxGeometry(1, 1, 1); // plain cubes: 12 triangles each, so thousands stay cheap
 const voxMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.58, metalness: 0.02 });
 const clumpMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.58, metalness: 0.02 });
-const CUT = new THREE.Color(BLOOD ? 0x6c0d0b : 0xe9e2d2); // raw red where a block was torn out (pale core if blood is off)
+const CUT = new THREE.Color(BLOOD ? 0x6c0d0b : 0xe9e2d2);
+const IN = { bone: new THREE.Color(0xe6dec8), muscle: new THREE.Color(0x6e1713), muscle2: new THREE.Color(0x56100f), fat: new THREE.Color(0xc98a76), lung: new THREE.Color(0xb85f69), heart: new THREE.Color(0x6b0c12), brain: new THREE.Color(0xb59098), brain2: new THREE.Color(0x8b5a66), coil: [0xc27a70, 0xb0655f, 0x9a4a46, 0xc88a80].map(h => new THREE.Color(h)), liver: new THREE.Color(0x7d2d24) }; // raw red where a block was torn out (pale core if blood is off)
 const _ct = new THREE.Vector3();
 const N6 = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 const vkey = (i, j, k) => ((i + 512) * 1024 + (j + 512)) * 1024 + (k + 512);
@@ -1092,17 +1105,25 @@ function buildVoxTemplate() {
   const SKIN = C(0xdcc7ab), SHIRT = C(0xcbb191), PANTS = C(0xc2a88a), SHOE = C(0xa89070), BELT = C(0xb9a082), HAIR = C(0xdcc7ab), EYE = C(0x15171a); // one family of tan mannequin tones, a slightly different shade per body part
   const clamp = THREE.MathUtils.clamp, t = V();
   const bounds = (pts, pad) => ({ min: V().set(Math.min(...pts.map(p => p.x)) - pad, Math.min(...pts.map(p => p.y)) - pad, Math.min(...pts.map(p => p.z)) - pad), max: V().set(Math.max(...pts.map(p => p.x)) + pad, Math.max(...pts.map(p => p.y)) + pad, Math.max(...pts.map(p => p.z)) + pad) });
-  const capsule = (a, b, r0, r1, color, flat = false, also = null) => { const ab = b.clone().sub(a), L2 = ab.lengthSq(); return { color, ...bounds([a, b], Math.max(r0, r1) + STEP), test: w => { let u = t.copy(w).sub(a).dot(ab) / L2; if (flat && (u < 0 || u > 1)) return false; u = clamp(u, 0, 1); const r = r0 + (r1 - r0) * u; t.copy(w).sub(a).addScaledVector(ab, -u); return t.lengthSq() < r * r && (!also || also(w, u)); } }; };
-  const prism = (a, b, l0, l1, d0, d1, color, also = null) => { const ab = b.clone().sub(a), L2 = ab.lengthSq(); return { color, ...bounds([a, b], Math.max(l0, l1, d0, d1) + STEP), test: w => { t.copy(w).sub(a); const u = t.dot(ab) / L2; if (u < 0 || u > 1) return false; t.addScaledVector(ab, -u); const l = l0 + (l1 - l0) * u, d = d0 + (d1 - d0) * u; return t.x * t.x / (l * l) + t.z * t.z / (d * d) < 1 && (!also || also(w)); } }; };
-  const ellipsoid = (c, rx, ry, rz, color, also = null) => ({ color, ...bounds([c], Math.max(rx, ry, rz) + STEP), test: w => { const x = (w.x - c.x) / rx, y = (w.y - c.y) / ry, z = (w.z - c.z) / rz; return x * x + y * y + z * z < 1 && (!also || also(w)); } });
+  const capsule = (a, b, r0, r1, color, flat = false, also = null) => { const ab = b.clone().sub(a), L2 = ab.lengthSq(); let fr = 1; return { color, ...bounds([a, b], Math.max(r0, r1) + STEP), test: w => { let u = t.copy(w).sub(a).dot(ab) / L2; if (flat && (u < 0 || u > 1)) return false; u = clamp(u, 0, 1); const r = r0 + (r1 - r0) * u; t.copy(w).sub(a).addScaledVector(ab, -u); fr = Math.sqrt(t.lengthSq()) / r; return fr < 1 && (!also || also(w, u)); }, inner: () => fr < 0.25 ? IN.bone : fr < 0.72 ? IN.muscle : IN.fat }; };
+  const prism = (a, b, l0, l1, d0, d1, color, also = null, zone = 'lower') => { const ab = b.clone().sub(a), L2 = ab.lengthSq(); let q = 1, lx = 0, lz = 0; return { color, ...bounds([a, b], Math.max(l0, l1, d0, d1) + STEP), test: w => { t.copy(w).sub(a); const u = t.dot(ab) / L2; if (u < 0 || u > 1) return false; t.addScaledVector(ab, -u); const l = l0 + (l1 - l0) * u, d = d0 + (d1 - d0) * u; lx = t.x; lz = t.z; q = Math.sqrt(t.x * t.x / (l * l) + t.z * t.z / (d * d)); return q < 1 && (!also || also(w)); }, inner: w => {
+      if (q > 0.8) return IN.fat;
+      const hash = (Math.floor(w.x / STEP) * 7 + Math.floor(w.y / STEP) * 13 + Math.floor(w.z / STEP) * 5) & 3;
+      if (q > 0.58) return zone === 'upper' && Math.floor(w.y / 0.05) % 2 === 0 ? IN.bone : IN.muscle; // ribs
+      if (Math.abs(lx) < 0.038 && lz < -0.028) return IN.bone; // the spine
+      if (zone === 'upper') { if (lx > 0.015 && lx < 0.095 && lz > -0.01) return IN.heart; if (Math.abs(lx) > 0.045 && lz > -0.03) return IN.lung; return IN.muscle2; }
+      if (zone === 'lower' && lx < -0.02 && lz > 0) return IN.liver;
+      return hash === 3 ? IN.muscle2 : IN.coil[hash];
+    } }; };
+  const ellipsoid = (c, rx, ry, rz, color, also = null) => { let f = 1; return { color, ...bounds([c], Math.max(rx, ry, rz) + STEP), test: w => { const x = (w.x - c.x) / rx, y = (w.y - c.y) / ry, z = (w.z - c.z) / rz; f = Math.sqrt(x * x + y * y + z * z); return f < 1 && (!also || also(w)); }, inner: w => f > 0.8 ? IN.fat : f > 0.6 ? IN.bone : ((Math.floor(w.x / STEP) + Math.floor(w.y / STEP) + Math.floor(w.z / STEP)) & 1 ? IN.brain : IN.brain2) }; };
   const box = (min, max, color) => ({ color, min: min.clone().subScalar(STEP), max: max.clone().addScalar(STEP), test: w => w.x > min.x && w.x < max.x && w.y > min.y && w.y < max.y && w.z > min.z && w.z < max.z });
   const hipsP = P("Hips"), spineP = P("Spine"), s1 = P("Spine1"), s2 = P("Spine2"), neckP = P("Neck"), headP = P("Head"), topP = P("HeadTop_End");
   const shoulderHalf = Math.abs(P("LeftArm").x - P("RightArm").x) / 2, hipHalf = Math.abs(P("LeftUpLeg").x - P("RightUpLeg").x) / 2;
   const mid = s1.clone().add(s2).multiplyScalar(0.5);
   const prims = {};
-  prims.Hips = [prism(hipsP.clone().add(V().set(0, -0.09, 0)), spineP, hipHalf + 0.075, hipHalf + 0.035, 0.115, 0.105, BELT), prism(hipsP.clone().add(V().set(0, -0.09, 0)), spineP, hipHalf + 0.075, hipHalf + 0.035, 0.115, 0.105, BELT, w => w.y > spineP.y - 0.04)];
+  prims.Hips = [prism(hipsP.clone().add(V().set(0, -0.09, 0)), spineP, hipHalf + 0.075, hipHalf + 0.035, 0.115, 0.105, BELT, null, 'pelvis'), prism(hipsP.clone().add(V().set(0, -0.09, 0)), spineP, hipHalf + 0.075, hipHalf + 0.035, 0.115, 0.105, BELT, w => w.y > spineP.y - 0.04, 'pelvis')];
   prims.Spine = [prism(spineP, mid, hipHalf + 0.035, shoulderHalf * 0.92, 0.105, 0.118, SHIRT)];
-  prims.Spine2 = [prism(mid, neckP.clone().add(V().set(0, -0.02, 0)), shoulderHalf * 0.92, shoulderHalf + 0.02, 0.118, 0.105, SHIRT)];
+  prims.Spine2 = [prism(mid, neckP.clone().add(V().set(0, -0.02, 0)), shoulderHalf * 0.92, shoulderHalf + 0.02, 0.118, 0.105, SHIRT, null, 'upper')];
   prims.Neck = [capsule(neckP.clone().add(V().set(0, -0.03, 0)), headP.clone().add(V().set(0, 0.02, 0)), 0.048, 0.046, SKIN, true)];
   const hc = headP.clone().add(V().set(0, (topP.y - headP.y) * 0.55, 0)), hr = (topP.y - headP.y) * 0.62;
   prims.Head = [ellipsoid(hc, 0.084, hr, 0.097, SKIN), ellipsoid(hc, 0.084, hr, 0.097, HAIR, w => w.y > hc.y + 0.03 || w.z < hc.z - 0.05),
@@ -1123,10 +1144,10 @@ function buildVoxTemplate() {
     const cells = new Map(), w = V();
     for (let i = Math.floor(lo.x / cl); i <= Math.ceil(hi.x / cl); i++) for (let j = Math.floor(lo.y / cl); j <= Math.ceil(hi.y / cl); j++) for (let k = Math.floor(lo.z / cl); k <= Math.ceil(hi.z / cl); k++) {
       w.set(i * cl, j * cl, k * cl); bone.localToWorld(w);
-      for (let n = list.length - 1; n >= 0; n--) if (list[n].test(w)) { cells.set(vkey(i, j, k), { i, j, k, c: list[n].color }); break; } // later shapes win (belt over trousers, eyes over face)
+      for (let n = list.length - 1; n >= 0; n--) if (list[n].test(w)) { cells.set(vkey(i, j, k), { i, j, k, c: list[n].color, inner: list[n].inner ? list[n].inner(w).clone().multiplyScalar(rand(0.93, 1.07)) : null }); break; } // later shapes win (belt over trousers, eyes over face)
     }
     const arr = [];
-    for (const v of cells.values()) arr.push({ p: new THREE.Vector3(v.i * cl, v.j * cl, v.k * cl), i: v.i, j: v.j, k: v.k, c: v.c.clone().multiplyScalar(rand(0.93, 1.06)) });
+    for (const v of cells.values()) arr.push({ p: new THREE.Vector3(v.i * cl, v.j * cl, v.k * cl), i: v.i, j: v.j, k: v.k, c: v.c.clone().multiplyScalar(rand(0.93, 1.06)), inner: v.inner });
     out[bn] = { s, cl, cells: arr };
   }
   return out;
@@ -1218,7 +1239,7 @@ class Soldier {
       const t = VOX[bn], bone = this.bones[bn], n = t.cells.length; if (!n || !bone) continue;
       const mesh = new THREE.InstancedMesh(VOX_UNIT, voxMat, n);
       const sz = STEP / t.s; sc.set(sz, sz, sz);
-      const vox = t.cells.map((c, idx) => ({ p: c.p, i: c.i, j: c.j, k: c.k, c: c.c, idx, cut: false })), map = new Map();
+      const vox = t.cells.map((c, idx) => ({ p: c.p, i: c.i, j: c.j, k: c.k, c: c.c, inner: c.inner, idx, cut: false })), map = new Map();
       mesh.userData.vox = vox; mesh.userData.map = map;
       for (let i = 0; i < n; i++) { const v = vox[i]; map.set(vkey(v.i, v.j, v.k), v); m4.compose(v.p, q.identity(), sc); mesh.setMatrixAt(i, m4); mesh.setColorAt(i, v.c); }
       mesh.userData.sz = sz; mesh.castShadow = true; mesh.receiveShadow = true; mesh.frustumCulled = false;
@@ -1238,7 +1259,7 @@ class Soldier {
         if (i !== last) { const l = vox[last]; vox[i] = l; l.idx = i; m.getMatrixAt(last, m4); m.setMatrixAt(i, m4); m.getColorAt(last, col); m.setColorAt(i, col); }
         vox.pop(); m.count--;
       }
-      for (const v of gone) for (const [a, b, c] of N6) { const nb = map.get(vkey(v.i + a, v.j + b, v.k + c)); if (nb && !nb.cut) { nb.cut = true; nb.c = CUT.clone().multiplyScalar(rand(0.94, 1.04)); m.setColorAt(nb.idx, nb.c); } }
+      for (const v of gone) for (const [a, b, c] of N6) { const nb = map.get(vkey(v.i + a, v.j + b, v.k + c)); if (nb && !nb.cut) { nb.cut = true; nb.c = (BLOOD && nb.inner ? nb.inner.clone().lerp(CUT, 0.22) : CUT.clone()).multiplyScalar(rand(0.94, 1.04)); m.setColorAt(nb.idx, nb.c); } }
       m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true;
     };
     const touched = [];
@@ -1390,7 +1411,7 @@ class Soldier {
     const capMat = new THREE.MeshStandardMaterial({ color: BLOOD ? 0x6a1212 : 0x2c2826, roughness: 0.7, side: THREE.DoubleSide });
     const boneMat = new THREE.MeshStandardMaterial({ color: BLOOD ? 0xe8dfcc : 0x5c5852, roughness: 0.6 });
     const r = { head: 0.065, uArmL: 0.06, uArmR: 0.06, lArmL: 0.048, lArmR: 0.048, uLegL: 0.085, uLegR: 0.085, lLegL: 0.065, lLegR: 0.065 }[name] || 0.06;
-    for (const [holder, normal] of [[parent.group, out], [part.group, out.clone().negate()]]) {
+    if (!this.vox) for (const [holder, normal] of [[parent.group, out], [part.group, out.clone().negate()]]) {
       holder.updateMatrixWorld(true);
       const cap = new THREE.Mesh(new THREE.CircleGeometry(r, 16), capMat);
       cap.position.copy(pivot).addScaledVector(normal, 0.004); cap.lookAt(pivot.clone().add(normal));
@@ -1401,7 +1422,8 @@ class Soldier {
     // the piece flies off the way the blade was going
     if (dir) { const v = dir.clone().multiplyScalar(2.2).add(new THREE.Vector3(0, 1.2, 0)); part.body.velocity.x += v.x; part.body.velocity.y += v.y; part.body.velocity.z += v.z; part.body.angularVelocity.set(rand(-8, 8), rand(-8, 8), rand(-8, 8)); }
     Sound.sever(pivot);
-    if (BLOOD) { spray(pivot, out, 70, 3, 0.8); spray(pivot, out.clone().negate(), 50, 2.2, 0.8); pixelGibs(pivot, out, 8); this.bleed.push({ obj: (() => { const o = new THREE.Object3D(); parent.group.updateMatrixWorld(true); o.position.copy(parent.group.worldToLocal(pivot.clone())); o.quaternion.copy(parent.group.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(new THREE.Quaternion().setFromUnitVectors(UPV, out))); parent.group.add(o); return o; })(), t: 0, dur: 12, rate: 90, artery: true }); }
+    if (this.vox) this.chunkOut(pivot, out, out, 0.95); // the torn joint opens up on both sides
+    if (BLOOD) { spray(pivot, out, 70, 3, 0.8); spray(pivot, out.clone().negate(), 50, 2.2, 0.8); pixelGibs(pivot, out, 8); this.bleed.push({ obj: (() => { const o = new THREE.Object3D(); parent.group.updateMatrixWorld(true); o.position.copy(parent.group.worldToLocal(pivot.clone())); o.quaternion.copy(parent.group.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(new THREE.Quaternion().setFromUnitVectors(UPV, out))); parent.group.add(o); return o; })(), t: 0, dur: 45, rate: 90, artery: true }); }
     // losing a head or a leg ends the fight; an arm he can stagger on with
     if (name === "head" || /Leg/.test(name)) { if (this.balance) this.endBalance(); this.tone = name === "head" ? 0.2 : 0.6; this.hp = -999; }
     else { this.limpArms = this.limpArms || new Set(); this.limpArms.add(name.slice(-1)); this.hands = (this.hands || []).filter(h => h !== name.slice(-1)); }
@@ -1492,12 +1514,12 @@ class Soldier {
     }
   }
   // the hole keeps bleeding: a wound point on the nearest body part that drips, pumps and runs
-  bleedAt(point, normal, rate = 26, dur = 14, artery = false) {
+  bleedAt(point, normal, rate = 26, dur = 60, artery = false) {
     const part = this.parts[this.nearestPart(point)]; if (!part) return;
     part.group.updateMatrixWorld(true);
     const o = new THREE.Object3D(); o.position.copy(part.group.worldToLocal(point.clone()));
     o.quaternion.copy(part.group.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(new THREE.Quaternion().setFromUnitVectors(UPV, normal.clone().normalize())));
-    part.group.add(o); this.bleed.push({ obj: o, t: 0, dur, rate, artery });
+    part.group.add(o); this.bleed.push({ obj: o, t: 0, dur, rate, artery, clotT: 16 });
   }
   // a shot knocks a random lump out of him: a ragged ball of blocks around the hit goes flying as a few solid chunks
   chunkOut(point, normal, dir, scale = 1) {
@@ -1513,10 +1535,11 @@ class Soldier {
       Sound.crunch(point, Math.min(1, n / 25)); redMist(point, dir, Math.min(1.5, n / 30));
       if (BLOOD) {
         this.stain(c, R * 2.2);
-        { const part = this.parts[this.nearestPart(point)]; if (part) for (let i = 0; i < 3; i++) decalOn(part.group, splatMats[(Math.random() * splatMats.length) | 0], point.clone().add(V().set(rand(-1, 1), rand(-1, 1), rand(-1, 1)).multiplyScalar(R * 0.8)), normal, R * rand(2.6, 4.5), R * rand(2.2, 3.8)); } // wet smears on the body round the hole
+        { const part = this.parts[this.nearestPart(point)]; if (part) for (let i = 0; i < 2; i++) decalOn(part.group, splatMats[(Math.random() * splatMats.length) | 0], point.clone().add(V().set(rand(-1, 1), rand(-1, 1), rand(-1, 1)).multiplyScalar(R * 1.1)), normal, R * rand(1.6, 2.6), R * rand(1.4, 2.4)); } // wet smears on the body round the hole
         spray(c, dir.clone().negate().lerp(normal, 0.4).normalize(), Math.round(30 + n), 2.6, 0.7, 0.004, 0.012); spray(c, dir, Math.round(20 + n * 0.6), 4.5, 0.5);
         pixelGibs(c, dir, Math.min(14, 3 + (n / 8) | 0));
-        this.bleedAt(c, normal, 24 + n * 0.3, 14);
+        if (n > 26 || this.lastHitHead) bloodHaze(c, Math.min(2.2, n / 28 + (this.lastHitHead ? 1 : 0)));
+        this.bleedAt(c, normal, 24 + n * 0.3);
       }
     }
     return n;
@@ -1531,7 +1554,7 @@ class Soldier {
     const A = point.clone(), Bp = last.point.clone().addScaledVector(dir, STEP * 0.6), ab = Bp.clone().sub(A), L2 = ab.lengthSq(), t = V(), r2 = Math.pow(rand(0.022, 0.034), 2);
     this.carve(w => { const u = THREE.MathUtils.clamp(t.copy(w).sub(A).dot(ab) / L2, 0, 1); return t.copy(w).sub(A).addScaledVector(ab, -u).lengthSq() < r2; }, dir, Bp, 2);
     const nOut = this.chunkOut(Bp, dir, dir, scale * rand(1.0, 1.5));
-    if (BLOOD && nOut) { spray(Bp, dir, 70, 5.5, 0.6, 0.005, 0.014); this.bleedAt(Bp, dir, 36, 16); this.stain(Bp, 0.16); }
+    if (BLOOD && nOut) { spray(Bp, dir, 70, 5.5, 0.6, 0.005, 0.014); this.bleedAt(Bp, dir, 36); this.stain(Bp, 0.16); }
   }
   // the triangles weighted to a bone (and everything below it) are removed: that piece of him is gone
   removeMeshUnder(rootBone) {
@@ -1608,7 +1631,7 @@ class Soldier {
     this.wounds.push({ obj: wound, region });
     if (!this.gripWound) this.gripWound = wound;
     // a neck wound is arterial: it spurts with the heartbeat for a long time
-    this.bleed.push(neck ? { obj: wound, t: 0, dur: 16, rate: 90, artery: true } : { obj: wound, t: 0, dur: head ? 4 : 12, rate: head ? 40 : 14 });
+    this.bleed.push(neck ? { obj: wound, t: 0, dur: 45, rate: 90, artery: true } : { obj: wound, t: 0, dur: head ? 25 : 60, clotT: head ? 6 : 16, rate: head ? 40 : 14 });
     redMist(point, dir, head ? 2 : 1.2); redMist(point, normal, head ? 1 : 0.5);
     spray(point, normal, head ? 60 : 26, 1.6, 0.5);
     spray(point, dir, head ? 100 : 40, 4.5, 0.5);
@@ -1632,7 +1655,7 @@ class Soldier {
       const part = R.mode === "neck" ? "head" : region;
       if (part in this.limbHp && !(this.joints[part] && this.joints[part].severed)) {
         this.limbHp[part] -= (opts.dmg || 18) * (opts.dist !== undefined && opts.dist < 4 ? 1.5 : 1);
-        // (limbs no longer come off)
+        if (this.limbHp[part] <= 0 && /^(uArm|lArm|uLeg|lLeg)/.test(part)) this.crack(part, point, dir);
       }
     }
     // a heavy hit can pop a shoulder or a knee
@@ -1879,11 +1902,12 @@ class Soldier {
     const curl = mode === "gut" ? 0.85 + 0.25 * buckle : mode === "arm" ? 0.25 : 0.4 + 0.3 * buckle;
     for (const [n, f] of [["Spine", 0.3], ["Spine1", 0.35], ["Spine2", 0.35]]) P[n].rotateX(curl * f);
     P.Neck.rotateX((mode === "gut" ? 0.15 : 0.25) + 0.2 * buckle);
+    if (this.limpLeg) { const sg = this.limpLeg === "L" ? 1 : -1; for (const n of ["Spine", "Spine1", "Spine2"]) P[n].rotateZ(sg * 0.06); }
     this.puppet.updateMatrixWorld(true);
     const hips = P.Hips.getWorldPosition(V());
     this.puppet.position.x += pel.position.x - hips.x;
     this.puppet.position.z += pel.position.z - hips.z;
-    this.puppet.position.y = -0.3 * buckle - 0.04 * Math.min(1, B.stun * 6);
+    this.puppet.position.y = -0.3 * buckle - 0.04 * Math.min(1, B.stun * 6) - (this.limpLeg ? 0.05 : 0);
     this.puppet.updateMatrixWorld(true);
     // legs reach for the feet (two-bone IK), knees forward
     for (const sd of ["L", "R"]) {
@@ -2175,6 +2199,7 @@ class Soldier {
     if (prop) { this.wallContact(body, prop, e); return; }
     if (e.body !== ground) return;
     // a body thrown hard enough into the floor can tear a joint
+    { const vv = Math.abs(e.contact.getImpactVelocityAlongNormal()); if (vv > 6) { const bi = e.contact.bi === body, ni = toV(e.contact.ni), cp = toV(body.position).add(toV(bi ? e.contact.ri : e.contact.rj)); this.squash(body, cp, bi ? ni : ni.negate(), vv); } }
     if (Math.abs(e.contact.getImpactVelocityAlongNormal()) > 8) { const n = Object.keys(this.parts).find(k => this.parts[k].body === body); if (/^(uArm|lLeg)/.test(n || "")) this.dislocate(n); }
     const v = Math.abs(e.contact.getImpactVelocityAlongNormal());
     const now = performance.now();
@@ -2208,6 +2233,7 @@ class Soldier {
   // hitting a wall or crate: staggering into one ends with him sliding down it into a sitting slump
   wallContact(body, prop, e) {
     const v = Math.abs(e.contact.getImpactVelocityAlongNormal());
+    if (v > 6.5) { const bi = e.contact.bi === body, ni = toV(e.contact.ni), cp = toV(body.position).add(toV(bi ? e.contact.ri : e.contact.rj)); this.squash(body, cp, bi ? ni : ni.negate(), v); }
     const P = this.parts, torso = body === P.chest.body || body === P.pelvis.body;
     const now = performance.now();
     if (v > 0.8 && now - (body.lastHit || 0) > 250) { body.lastHit = now; const p = toV(body.position); if (body === P.head.body) Sound.clank(p, v / 3); else { Sound.thud(p, v * body.mass / 8); if (torso) Sound.rattle(p, v / 3); } }
@@ -2238,6 +2264,38 @@ class Soldier {
   // nothing that would stop him being put to rest while it's going on
   busy() {
     return !!(this.writhe || this.getUp || this.held || (this.daze > 0) || (this.wallSlump && this.wallSlump.t < 3.2) || (this.lastBreath && this.lastBreath.t < 3.6) || (this.catchT !== undefined && this.catchT < 1.4));
+  }
+  // a hard impact (a fall from height, a throw into a wall) squashes the blocks at the contact flat instead of chipping them
+  squash(body, cp, toOther, v) {
+    if (!this.vox) return;
+    const now = performance.now(); if (now - (body.lastSquash || 0) < 450) return; body.lastSquash = now;
+    const R = THREE.MathUtils.clamp(0.07 + (v - 6) * 0.012, 0.07, 0.24), w = V(), inv = new THREE.Matrix4(), m4 = new THREE.Matrix4(), q0 = new THREE.Quaternion(), sc = V();
+    let any = 0;
+    for (const bn in this.vox) {
+      const m = this.vox[bn], vox = m.userData.vox; inv.copy(m.matrixWorld).invert();
+      const nl = toOther.clone().transformDirection(inv), ax = Math.abs(nl.x) > Math.abs(nl.y) && Math.abs(nl.x) > Math.abs(nl.z) ? 'x' : Math.abs(nl.y) > Math.abs(nl.z) ? 'y' : 'z', sg = Math.sign(nl[ax]) || 1, sz = m.userData.sz;
+      let ch = false;
+      for (let i = 0; i < vox.length; i++) {
+        const b = vox[i]; if (b.sq) continue;
+        w.copy(b.p).applyMatrix4(m.matrixWorld); if (w.distanceTo(cp) > R * rand(0.75, 1.1)) continue;
+        b.sq = true; any++; ch = true;
+        sc.set(sz, sz, sz); sc[ax] = sz * 0.3; const p = b.p.clone(); p[ax] += sg * sz * 0.34; // flattened toward the surface it hit
+        m4.compose(p, q0, sc); m.setMatrixAt(b.idx, m4);
+        if (BLOOD) { b.c = b.c.clone().lerp(IN.muscle2, 0.55); m.setColorAt(b.idx, b.c); }
+      }
+      if (ch) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
+    }
+    if (any) { Sound.crunch(cp, Math.min(1, v / 14)); Sound.thud(cp, v); if (BLOOD) { surfaceSplat(cp.clone().addScaledVector(toOther, 0.01), toOther.clone().negate(), R * rand(2.2, 3.4)); spray(cp, toOther.clone().negate(), 25 + any, 2.5, 0.9); bloodHaze(cp, 0.8); } }
+  }
+  // a bone gives way: the joint flops the wrong way, shards of bone burst out, and a broken leg means a limp
+  crack(part, point, dir) {
+    if (this.cracked && this.cracked.has(part)) return; this.cracked = this.cracked || new Set(); this.cracked.add(part);
+    this.dislocate(part); Sound.pop(point);
+    const list = [], bq = new THREE.Quaternion();
+    for (let i = 0; i < 5; i++) list.push({ w: point.clone().add(V().set(rand(-0.05, 0.05), rand(-0.05, 0.05), rand(-0.05, 0.05))), q: bq.clone().setFromEuler(new THREE.Euler(rand(0, 6), rand(0, 6), rand(0, 6))), c: IN.bone.clone() });
+    spawnClumps(list, dir, point, 0.6);
+    if (BLOOD) { spray(point, dir.clone().negate(), 40, 3, 0.8); this.bleedAt(point, dir.clone().negate(), 30); }
+    if (/Leg/.test(part)) { const sd = part.slice(-1); this.limpLeg = sd; this.legsHit = this.legsHit || new Set(); this.legsHit.add(sd); }
   }
   // twist limit done right: measure each part's roll relative to its parent *since the hit* and clamp it.
   // the part rotates about its own joint, so the correction never pulls the joint apart.
@@ -2369,19 +2427,21 @@ class Soldier {
         const phase = heart.beat % 1;
         strength = Math.min(strength, heart.strength);
         const spurt = phase < 0.22 ? Math.sin(phase / 0.22 * Math.PI) : 0;
-        const n = Math.floor(b.rate * 1.8 * dt * (0.15 + spurt * 2.2) * Math.max(0.15, strength) + Math.random() * 0.7);
+        const kc = Math.exp(-b.t / 38), clotA = 1 - kc; // the artery slowly closes up
+        const n = Math.floor(b.rate * 1.8 * dt * (0.15 + spurt * 2.2) * Math.max(0.15, strength) * (0.25 + 0.75 * kc) + Math.random() * 0.7 * kc);
         for (let i = 0; i < n; i++) {
-          const v = out.clone().multiplyScalar((0.6 + spurt * 2.6) * Math.max(0.35, strength) * rand(0.9, 1.05)).add(new THREE.Vector3(rand(-0.05, 0.05), rand(-0.02, 0.06), rand(-0.05, 0.05)));
-          drop(at, v, spurt > 0.4 ? rand(0.006, 0.013) : rand(0.004, 0.008));
+          const v = out.clone().multiplyScalar((0.6 + spurt * 2.6) * Math.max(0.35, strength) * rand(0.9, 1.05) * (0.5 + 0.5 * kc)).add(new THREE.Vector3(rand(-0.05, 0.05), rand(-0.02, 0.06), rand(-0.05, 0.05)));
+          drop(at, v, (spurt > 0.4 ? rand(0.006, 0.013) : rand(0.004, 0.008)) * (1 + clotA * 0.5), clotA);
         }
         if (b.t < 9) { this.gurgleAt = (this.gurgleAt || 0) - dt; if (this.gurgleAt <= 0) { this.gurgleAt = rand(0.9, 1.8); Sound.gurgle(at, strength); } }
         continue;
       }
-      // the first moments: a little outflow straight from the wound
-      if (b.t < 4) {
-        const f = 1 - b.t / 4, pulse = 0.6 + 0.4 * Math.sin(b.t * 9);
-        const n = Math.floor(b.rate * 1.4 * dt * f * pulse + Math.random() * 0.6);
-        for (let i = 0; i < n; i++) drop(at, out.clone().multiplyScalar(rand(0.3, 1.1) * f * pulse + 0.1).add(new THREE.Vector3(rand(-0.06, 0.06), -0.05, rand(-0.06, 0.06))), rand(0.004, 0.009));
+      // a wound pumps hard at first, then runs, then oozes and clots: slower, thicker, darker drops, nearly stopped by a minute
+      const kc = Math.exp(-b.t / (b.clotT || 16)), clotA = 1 - kc;
+      if (kc > 0.03) {
+        const pulse = 0.6 + 0.4 * Math.sin(b.t * 9 * (0.3 + kc) + 1);
+        const n = Math.floor(b.rate * 1.3 * dt * kc * pulse + Math.random() * 0.5 * kc);
+        for (let i = 0; i < n; i++) drop(at, out.clone().multiplyScalar((rand(0.3, 1.1) * kc + 0.05) * pulse + 0.06).add(new THREE.Vector3(rand(-0.06, 0.06), -0.05 - clotA * 0.1, rand(-0.06, 0.06))), rand(0.004, 0.009) * (1 + clotA * 0.6), clotA);
       }
     }
     // stains soak outward and run downhill along the body; runners carry blood down and drip off the end
@@ -2570,6 +2630,13 @@ function gravGrab() {
   G.dist = THREE.MathUtils.clamp(h.point.distanceTo(camera.position), 1.6, 4);
   Sound.zap(h.point);
 }
+// F while holding a limb or the head: tear it off at the joint. you keep holding the torn-off piece
+function gravRip() {
+  if (!G.held) return; const { s, part } = G.held;
+  if (!/^(uArm|lArm|uLeg|lLeg|head)/.test(part) || (s.joints[part] && s.joints[part].severed)) { Sound.click(0.2, 1200); return; }
+  const dir = V().set(0, 0, -1).applyQuaternion(camera.quaternion);
+  s.sever(part, dir.clone().multiplyScalar(0.3)); gs.shake = Math.max(gs.shake || 0, 0.45); Sound.launch(camera.position);
+}
 function gravRelease() { if (!G.held) return; G.held.s.held = false; G.held.s.t = Math.min(G.held.s.t, 1.5); G.held = null; }
 function gravFire() {
   G.kick = 1;
@@ -2712,6 +2779,7 @@ document.addEventListener("keydown", e => {
   if (e.code === "Digit4") setWeapon("sword");
   if (e.code === "Digit5") setWeapon("gravity");
   if (e.code === "KeyE") spawnTarget();
+  if (e.code === "KeyF" && weapon === "gravity") gravRip();
   if (e.code === "KeyQ") slowmo = !slowmo;
   if (e.code === "Space" && player.onGround) { player.vel.y = 4.2; player.onGround = false; }
 });
@@ -3025,10 +3093,10 @@ function update(realDt) {
   for (let i = puffs.length - 1; i >= 0; i--) {
     const s = puffs[i], u = s.userData;
     u.t += dt; const a = u.t / u.life;
-    s.position.addScaledVector(u.v, dt); u.v.multiplyScalar(1 - 1.6 * dt);
+    s.position.addScaledVector(u.v, dt); u.v.multiplyScalar(1 - (u.haze ? 0.5 : 1.6) * dt); if (u.sink) u.v.y -= u.sink * dt;
     s.scale.setScalar(u.size * (1 + a * (u.grow ? 6 : 2.2)));
     s.material.rotation += u.spin * dt;
-    s.material.opacity = Math.min(1, a * 8) * (1 - a) * (u.mist ? 0.7 : u.grow ? 0.35 : 0.3);
+    s.material.opacity = Math.min(1, a * 8) * (1 - a) * (u.haze ? 0.3 : u.mist ? 0.7 : u.grow ? 0.35 : 0.3);
     if (a >= 1) { scene.remove(s); s.material.dispose(); puffs.splice(i, 1); }
   }
   // shells
@@ -3139,7 +3207,7 @@ new GLTFLoader().load("models/Soldier.glb", anims => new GLTFLoader().load("mode
 loop();
 
 // testing hooks
-window.__game = { buildVoxTemplate: () => VOX, explode, barrels, sync: () => { for (const s of soldiers) s.pose(); scene.updateMatrixWorld(); }, gravGrab, gravFire, G, setFP: v => { firstPerson = v; }, me: () => me, eye, scene, renderer, sw, sword, setWeapon: w => setWeapon(w), swordAttack: k => swordAttack(k), player, soldiers, camera, shoot: () => { gs.cd = 0; shoot(); }, update, render, spawnTarget };
+window.__game = { gravRip, buildVoxTemplate: () => VOX, explode, barrels, sync: () => { for (const s of soldiers) s.pose(); scene.updateMatrixWorld(); }, gravGrab, gravFire, G, setFP: v => { firstPerson = v; }, me: () => me, eye, scene, renderer, sw, sword, setWeapon: w => setWeapon(w), swordAttack: k => swordAttack(k), player, soldiers, camera, shoot: () => { gs.cd = 0; shoot(); }, update, render, spawnTarget };
 </script>
 </body>
 </html>
