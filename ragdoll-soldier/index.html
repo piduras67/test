@@ -329,6 +329,7 @@ const Sound = (() => {
     flesh(pos) { if (!ok()) return; const t = ctx.currentTime, d = out(pos, 0.3); noise(d, t, 0.14, "lowpass", 620, 1.2, 0.7); noise(d, t + 0.01, 0.2, "bandpass", 230, 2.4, 0.45); tone(d, t, 0.12, 105, 45, 0.5); },
     crack(pos) { if (!ok()) return; const t = ctx.currentTime, d = out(pos, 0.3); for (let i = 0; i < 4; i++) noise(d, t + i * 0.011, 0.035, "bandpass", rand(1300, 2600), 4, 0.3); this.flesh(pos); },
     thud(pos, s) {
+      if (sample("thud", pos, Math.min(1, (s || 1) / 4) * 0.9, 0.85, 0.5)) return;
       if (!ok()) return; const t = ctx.currentTime, d = out(pos, 0.35), g = Math.min(1, s / 5);
       tone(d, t, 0.22, 85, 34, 0.75 * g); noise(d, t, 0.16, "lowpass", 380, 1, 0.55 * g); noise(d, t, 0.35, "bandpass", 900, 0.8, 0.12 * g); // body + cloth + grit
     },
@@ -349,7 +350,7 @@ const Sound = (() => {
     // a loose block knocking on the floor
     knock(pos, s = 1) { if (!ok()) return; const t = ctx.currentTime, d = out(pos, 0.15), g = Math.min(1, s); tone(d, t, 0.06, rand(260, 380), 160, 0.3 * g, "triangle"); noise(d, t, 0.03, "bandpass", rand(1100, 1800), 3, 0.22 * g); },
     drip(pos) { if (!ok()) return; const t = ctx.currentTime, d = out(pos, 0.1), f = rand(900, 1500); tone(d, t, 0.06, f, f * 1.8, 0.05); },
-    step(gain) { if (!ok()) return; const t = ctx.currentTime, d = out(null, 0.05); noise(d, t, 0.08, "lowpass", 450, 1, gain); noise(d, t, 0.04, "highpass", 3000, 1, gain * 0.25); },
+    step(gain) { if (sample("step", null, Math.min(1, gain * 5), 1, 0.2)) return; if (!ok()) return; const t = ctx.currentTime, d = out(null, 0.05); noise(d, t, 0.08, "lowpass", 450, 1, gain); noise(d, t, 0.04, "highpass", 3000, 1, gain * 0.25); },
     // wet, bubbling breaths through blood
     gurgle(pos, s = 1) {
       if (!ok()) return; const t = ctx.currentTime, d = out(pos, 0.15);
