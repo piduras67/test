@@ -398,11 +398,11 @@ const PIXEL_REDS = ["#3d0404", "#5e0707", "#86100c", "#a8170f"];
 const PIXEL_COLORS = PIXEL_REDS.map(c => new THREE.Color(c));
 const bloodMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x1a0000, roughness: 0.2, metalness: 0, envMapIntensity: 0.25 });
 const LIQUID_COLORS = ["#5a0a0a", "#6e0b0b", "#640909", "#2c0706"].map(c => new THREE.Color(c));
-const MAX_DROPS = 14000;
-const dropMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 2), bloodMat, MAX_DROPS);
+const MAX_DROPS = 5000;
+const dropMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0), bloodMat, MAX_DROPS);
 for (let i = 0; i < MAX_DROPS; i++) dropMesh.setColorAt(i, LIQUID_COLORS[i % LIQUID_COLORS.length]);
 dropMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-dropMesh.frustumCulled = false; dropMesh.castShadow = true;
+dropMesh.frustumCulled = false; dropMesh.castShadow = false; dropMesh.count = 0; // tiny drops need no shadows; only the live ones are drawn
 scene.add(dropMesh);
 const drops = Array.from({ length: MAX_DROPS }, () => ({ on: false, p: V(), v: V(), r: 0, life: 0 }));
 let dropCursor = 0;
@@ -541,10 +541,9 @@ function poolGeometry(seed) {
 const FIELD_SIZE = 7, FIELD_RES = 160, SHOW_RES = 320; // the field is drawn coarse, then cut at a fine resolution so the edge is smooth
 const fields = [];
 function makeField(x, z) {
-  const draw = document.createElement("canvas"); draw.width = draw.height = FIELD_RES;
-  const show = document.createElement("canvas"); show.width = show.height = SHOW_RES;
-  const tex = new THREE.CanvasTexture(show); tex.colorSpace = THREE.SRGBColorSpace;
-  tex.generateMipmaps = false; tex.minFilter = THREE.LinearFilter;
+  const field = new Float32Array(FIELD_RES * FIELD_RES), data = new Uint8Array(SHOW_RES * SHOW_RES * 4);
+  const tex = new THREE.DataTexture(data, SHOW_RES, SHOW_RES, THREE.RGBAFormat); tex.colorSpace = THREE.SRGBColorSpace;
+  tex.generateMipmaps = false; tex.minFilter = tex.magFilter = THREE.LinearFilter; tex.needsUpdate = true;
   const mat = new THREE.MeshPhysicalMaterial({ color: 0xffffff, map: tex, roughness: 0.1, metalness: 0, clearcoat: 0.6, clearcoatRoughness: 0.05, envMapIntensity: 0.22, emissive: 0x200000, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3 });
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(FIELD_SIZE, FIELD_SIZE), mat);
   mesh.rotation.x = -Math.PI / 2; mesh.position.set(x, 0.0018, z); mesh.receiveShadow = true;
@@ -553,7 +552,7 @@ function makeField(x, z) {
   // where walls and crates stand, the pool can't be: it fills up against them instead
   const mask = new Uint8Array(SHOW_RES * SHOW_RES);
   for (let j = 0; j < SHOW_RES; j++) for (let i = 0; i < SHOW_RES; i++) if (inProp(x - FIELD_SIZE / 2 + (i + 0.5) / SHOW_RES * FIELD_SIZE, z - FIELD_SIZE / 2 + (j + 0.5) / SHOW_RES * FIELD_SIZE)) mask[j * SHOW_RES + i] = 1;
-  const f = { mask, x, z, draw, dctx: draw.getContext("2d"), show, sctx: show.getContext("2d"), tex, mesh, sources: [], dirty: true, tick: 0, flow: new THREE.Vector2(Math.cos(flow), Math.sin(flow)) };
+  const f = { mask, x, z, field, data, tex, mesh, sources: [], dirty: true, tick: 0, flow: new THREE.Vector2(Math.cos(flow), Math.sin(flow)) };
   fields.push(f);
   return f;
 }
@@ -572,8 +571,8 @@ function bloodAt(x, z) {
   for (const f of fields) {
     const u = (x - f.x + FIELD_SIZE / 2) / FIELD_SIZE, v = (z - f.z + FIELD_SIZE / 2) / FIELD_SIZE;
     if (u < 0 || u > 1 || v < 0 || v > 1) continue;
-    const px = f.sctx.getImageData(Math.floor(u * SHOW_RES), Math.floor(v * SHOW_RES), 1, 1).data;
-    if (px[3] > 0) return true;
+    const col = Math.min(SHOW_RES - 1, Math.floor(u * SHOW_RES)), row = SHOW_RES - 1 - Math.min(SHOW_RES - 1, Math.floor(v * SHOW_RES));
+    if (f.data[(row * SHOW_RES + col) * 4 + 3] > 0) return true;
   }
   return false;
 }
@@ -608,38 +607,32 @@ function updateFields(dt) {
     if (!moving && !f.dirty) continue;
     if (f.tick > 0) continue;
     f.tick = 0.22; f.dirty = false;
-    const g = f.dctx, N = FIELD_RES, ppm = N / FIELD_SIZE;
-    g.clearRect(0, 0, N, N);
-    g.globalCompositeOperation = "lighter";
+    const N = FIELD_RES, ppm = N / FIELD_SIZE, fld = f.field, o = f.data;
+    fld.fill(0);
+    const addBlob = (bx, by, r, al) => { // a soft round blob added into the field
+      const x0 = Math.max(0, Math.floor(bx - r)), x1 = Math.min(N - 1, Math.ceil(bx + r)), y0 = Math.max(0, Math.floor(by - r)), y1 = Math.min(N - 1, Math.ceil(by + r));
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { const d = Math.hypot(x + 0.5 - bx, y + 0.5 - by); if (d < r) fld[y * N + x] += al * (1 - d / r); }
+    };
     for (const s of f.sources) {
       if (s.vol <= 0) continue;
       const cx = (s.x - f.x + FIELD_SIZE / 2) * ppm, cy = (s.z - f.z + FIELD_SIZE / 2) * ppm;
       const R = Math.sqrt(s.vol) * 0.55 * ppm;
-      const blob = (bx, by, r, a) => { const gr = g.createRadialGradient(bx, by, 0, bx, by, r); gr.addColorStop(0, `rgba(255,255,255,${a})`); gr.addColorStop(1, "rgba(255,255,255,0)"); g.fillStyle = gr; g.fillRect(bx - r, by - r, r * 2, r * 2); };
-      blob(cx, cy, R * 1.25, 0.9);
-      for (const [ang, d, rr] of s.lobes) blob(cx + Math.cos(ang) * R * d, cy + Math.sin(ang) * R * d, R * rr * 1.2, 0.55);
+      addBlob(cx, cy, R * 1.25, 0.9);
+      for (const [ang, d, rr] of s.lobes) addBlob(cx + Math.cos(ang) * R * d, cy + Math.sin(ang) * R * d, R * rr * 1.2, 0.55);
     }
-    g.globalCompositeOperation = "source-over";
-    // threshold the field into a crisp liquid edge with a thin soft rim; darker where it's deep
-    const src = g.getImageData(0, 0, N, N).data, out = f.sctx.createImageData(SHOW_RES, SHOW_RES), o = out.data;
-    // bilinear upsample of the coarse field, so the cut edge is a smooth curve rather than steps
-    const a = new Float32Array(SHOW_RES * SHOW_RES * 4), k = N / SHOW_RES;
+    // bilinear upsample of the coarse field, thresholded into a crisp liquid edge with a thin soft rim; darker where it's deep
+    const k = N / SHOW_RES;
     for (let y = 0; y < SHOW_RES; y++) {
-      const fy = Math.max(0, y * k - 0.5 * (1 - k)), y0 = Math.min(N - 1, fy | 0), y1 = Math.min(N - 1, y0 + 1), ty = fy - y0;
+      const fy = Math.max(0, y * k - 0.5 * (1 - k)), y0 = Math.min(N - 1, fy | 0), y1 = Math.min(N - 1, y0 + 1), ty = fy - y0, outRow = (SHOW_RES - 1 - y) * SHOW_RES;
       for (let x = 0; x < SHOW_RES; x++) {
         const fx = Math.max(0, x * k - 0.5 * (1 - k)), x0 = Math.min(N - 1, fx | 0), x1 = Math.min(N - 1, x0 + 1), tx = fx - x0;
-        const top = src[(y0 * N + x0) * 4] * (1 - tx) + src[(y0 * N + x1) * 4] * tx, bot = src[(y1 * N + x0) * 4] * (1 - tx) + src[(y1 * N + x1) * 4] * tx;
-        a[(y * SHOW_RES + x) * 4] = top * (1 - ty) + bot * ty;
+        const top = Math.min(1, fld[y0 * N + x0]) * (1 - tx) + Math.min(1, fld[y0 * N + x1]) * tx, bot = Math.min(1, fld[y1 * N + x0]) * (1 - tx) + Math.min(1, fld[y1 * N + x1]) * tx;
+        const v = top * (1 - ty) + bot * ty, i = (outRow + x) * 4;
+        if (v < 0.4 || f.mask[y * SHOW_RES + x]) { o[i + 3] = 0; continue; } // below the edge (dry floor), or under a wall
+        const e0 = Math.min(1, (v - 0.4) / 0.05), edge = e0 * e0 * (3 - 2 * e0), depth = Math.min(1, (v - 0.4) / 0.6);
+        o[i] = 112 - depth * 50; o[i + 1] = 11 - depth * 5; o[i + 2] = 10 - depth * 4; o[i + 3] = 255 * edge;
       }
     }
-    for (let i = 0; i < a.length; i += 4) {
-      const v = a[i] / 255;
-      if (v < 0.4 || f.mask[i >> 2]) continue; // below the edge (dry floor), or under a wall
-      // a crisp but anti-aliased liquid edge; thin at the rim (brighter red), deep and nearly black-red in the middle
-      const e0 = Math.min(1, (v - 0.4) / 0.05), edge = e0 * e0 * (3 - 2 * e0), depth = Math.min(1, (v - 0.4) / 0.6);
-      o[i] = 112 - depth * 50; o[i + 1] = 11 - depth * 5; o[i + 2] = 10 - depth * 4; o[i + 3] = 255 * edge;
-    }
-    f.sctx.putImageData(out, 0, 0);
     f.tex.needsUpdate = true;
   }
 }
@@ -3054,9 +3047,11 @@ function update(realDt) {
 
   // droplets: fly, stretch along their motion, land as puddles
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = V();
+  let dropHi = -1;
   for (let i = 0; i < MAX_DROPS; i++) {
     const d = drops[i];
     if (!d.on) continue;
+    dropHi = i;
     d.v.y -= 9.8 * dt; d.v.multiplyScalar(1 - 0.4 * dt);
     d.p.addScaledVector(d.v, dt);
     d.life -= dt;
@@ -3082,7 +3077,7 @@ function update(realDt) {
     m.compose(d.p, q, sc);
     dropMesh.setMatrixAt(i, m);
   }
-  dropMesh.instanceMatrix.needsUpdate = true;
+  if (dropHi >= 0 || dropMesh.count > 0) { dropMesh.count = dropHi + 1; dropMesh.instanceMatrix.needsUpdate = true; }
   updateFields(dt);
   updateGibs(dt);
   for (const r of runs) if (r.scale.y < r.userData.len) r.scale.y = Math.min(r.userData.len, r.scale.y + r.userData.speed * dt);
